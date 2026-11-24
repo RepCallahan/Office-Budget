@@ -18,6 +18,8 @@
   --danger-bg: #fef2f2;
   --warn: #92400e;
   --warn-bg: #fffbeb;
+  --amber: #d97706;
+  --amber-soft: #fffbeb;
   --shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px rgba(17, 24, 39, 0.04);
   --radius: 14px;
   --radius-sm: 10px;
@@ -44,6 +46,8 @@ body[data-theme="dark"] {
   --danger-bg: #3f1515;
   --warn: #fbbf24;
   --warn-bg: #3b2a05;
+  --amber: #fbbf24;
+  --amber-soft: #3b2a05;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
@@ -668,7 +672,7 @@ button.danger:hover,
 
 @media print {
   #view-setup, .sidebar, #banners, #expense-panel,
-  #section-overview, #section-expenses, #section-categories, #section-settings,
+  #section-overview, #section-budget, #section-expenses, #section-categories, #section-settings,
   .toolbar.no-print { display: none !important; }
   #view-budget, .app-main, #section-reports {
     display: block !important;
@@ -725,4 +729,109 @@ button.danger:hover,
   .summary-metrics, .field-row { grid-template-columns: 1fr; }
   .sidebar-title { display: none; }
   .sidebar-logo { width: 28px; }
+}
+
+/* ---- Planned budget page ---- */
+
+#section-budget .expenses-col { max-height: none; }
+
+
+.plan-metrics {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.plan-note { margin: 12px 0 0; }
+
+.plan-item {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.plan-item:last-child { border-bottom: 0; }
+
+.plan-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.plan-item-name {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.plan-item-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-item-stats strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.plan-item-stats .is-over { color: var(--red); font-weight: 650; }
+.plan-item-stats .is-ok { color: var(--green); }
+
+.plan-track {
+  height: 6px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.plan-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--green);
+  transition: width var(--ease), background var(--ease);
+}
+
+.plan-bar.is-warn { background: var(--amber); }
+.plan-bar.is-over { background: var(--red); }
+
+.plan-used {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-used.is-warn { color: var(--warn); }
+.plan-used.is-over { color: var(--red); }
+
+#plan-unallocated.pill-green { background: var(--green-soft); color: var(--green); }
+#plan-unallocated.is-over,
+#plan-unallocated.pill-red { background: var(--red-soft); color: var(--red); }
+
+.cat-group {
+  margin-top: 20px;
+}
+
+.cat-group:first-child { margin-top: 8px; }
+
+.cat-group h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.go-budget {
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .plan-metrics { grid-template-columns: 1fr; }
 }

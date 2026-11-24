@@ -158,3 +158,7 @@
   .page h2 { break-after: avoid; }
   .page tr { break-inside: avoid; }
 }
+
+.page table.plan-table th.num,
+.page table.plan-table td.num { text-align: right; }
+.page table.plan-table td.is-over { color: #b91c1c; font-weight: 650; }
