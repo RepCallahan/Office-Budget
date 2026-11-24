@@ -91,7 +91,7 @@ If you do not see it, confirm the Power-Up was created in the Callahan Office wo
 1. On the Callahan Office board, look in the **board header** (the top bar of the board, not a card). Click **Office Budget**.
 2. The first time, you will be asked to set it up. **Biennium budget** should already say `25000` ($25,000). Leave that unless the state allocation has changed.
 3. In **Already spent (from state report)**, enter the amount from the latest state report. For the October 2026 report (AD35), that is `22473.29`. Then click **Save and open budget**.
-4. You should now see a wide window: a green **Left**, a red **Spent**, and the percent remaining across the top, with the expense list on the left and the add-expense form, category totals, and actions on the right.
+4. You should now see a wide window with a left-hand menu. **Overview** shows a green **Left**, a red **Spent**, and the percent remaining, plus recent expenses and a form to add one. Use **Budget** to add custom categories (for example, Facebook ads) and set a planned amount for each.
 
 Anyone on the board, including Amy-Rose, can use it once it is added. They do not need to repeat this setup. They just click **Office Budget** in the board header.
 
@@ -100,12 +100,14 @@ Anyone on the board, including Amy-Rose, can use it once it is added. They do no
 ## How to use it day to day
 
 - Click **Office Budget** in the board header to open the budget.
-- To log spending, fill in the form on the right (date, amount, description, and a category from the state list) and click **Save expense**. If none of the categories fit, choose **Other** and type a short name. The person who adds an expense is filled in automatically from their Trello name.
-- To change or delete an expense, use **Edit** or **Delete** in the list on the left. Edit fills the form on the right; it does not open a second window.
-- To change the $25,000 biennium budget or the already-spent amount from a new state report, use **Budget settings** on the right.
+- Use the **Budget** page to add custom categories (name and a planned amount to spend this biennium). Each category shows planned, spent, left, and a progress bar. The top of the page compares total planned to the $25,000 biennium budget and shows how much is still unallocated.
+- To log spending, fill in the form on **Overview** or **Expenses** (date, amount, description, and a category you created) and click **Save expense**. If a purchase does not fit a planned category, choose **Other / Unplanned**. The person who adds an expense is filled in automatically from their Trello name.
+- To change or delete an expense, use **Edit** or **Delete** in the list. Edit fills the form; it does not open a second window.
+- The **Categories** page is a simple, read-only look at where logged expenses went. Planning and progress live on the **Budget** page.
+- To change the $25,000 biennium budget or the already-spent amount from a new state report, open **Settings**.
 - If you spend more than the biennium budget, the left number turns red and the window shows **Overspent**.
 - After you reconcile with a new state report, click **Archive / roll up**. That folds all logged expenses into the already-spent amount and clears the list, so the totals stay the same and you have room to keep logging. You will be asked to confirm first.
-- When you are ready to start a new biennium (the next one begins **January 4, 2027**), click **Reset budget**. A printable session report opens first, with the period dates, totals, spending by category, and the full expense list. Click **Print / Save as PDF** and save the file from your browser’s print dialog. Only after that, click **I've saved the report, reset for next session**. That clears expenses and the already-spent amount, sets the biennium budget back to $25,000, and records the new period start date.
+- When you are ready to start a new biennium (the next one begins **January 4, 2027**), click **Reset budget**. A printable session report opens first, with the period dates, totals, planned-vs-spent by category, and the full expense list. Click **Print / Save as PDF** and save the file from your browser’s print dialog. Only after that, click **I've saved the report, reset for next session**. That clears expenses and the already-spent amount, sets the biennium budget back to $25,000, and records the new period start date. Your planned category names and amounts are kept for the next session.
 - Trello only lets a Power-Up store a short amount of data on each board. If the budget is getting full, Budget Sync will warn you. Use **Archive / roll up** to free space.
 
 ---

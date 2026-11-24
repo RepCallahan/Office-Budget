@@ -42,6 +42,14 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z"/></svg>
               Overview
             </button>
+            <button type="button" class="nav-btn" data-section="budget">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="8" width="18" height="12" rx="2"/>
+                <path d="M3 10V7.5A2.5 2.5 0 0 1 5.5 5H16"/>
+                <circle cx="16.5" cy="14" r="1.25"/>
+              </svg>
+              Budget
+            </button>
             <button type="button" class="nav-btn" data-section="expenses">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
               Expenses
@@ -147,6 +155,62 @@
             </div>
           </section>
 
+          <section id="section-budget" class="app-section" data-section-panel="budget" hidden>
+            <header class="summary-card">
+              <div class="summary-metrics plan-metrics">
+                <div class="metric">
+                  <span class="metric-label">Biennium budget</span>
+                  <span id="plan-biennium" class="metric-value is-quiet">$25,000</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Total planned</span>
+                  <span id="plan-total" class="metric-value is-quiet">$0</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Unallocated</span>
+                  <span id="plan-unallocated" class="metric-value">$0</span>
+                </div>
+              </div>
+              <p id="plan-warn" class="banner banner-warn" hidden></p>
+              <p id="plan-note" class="col-sub plan-note"></p>
+            </header>
+            <div class="workspace">
+              <section class="expenses-col" aria-label="Planned categories">
+                <div class="col-head">
+                  <div>
+                    <h2>Planned categories</h2>
+                    <p class="col-sub">Set an amount for each category, then log expenses against it.</p>
+                  </div>
+                </div>
+                <div id="plan-list" class="table-wrap"></div>
+              </section>
+              <div class="form-slot">
+                <section class="panel panel-accent">
+                  <h2 id="plan-form-heading">Add category</h2>
+                  <form id="plan-form">
+                    <div class="field">
+                      <label for="plan-name">Category name</label>
+                      <input id="plan-name" type="text" maxlength="40" required placeholder="e.g. Facebook ads">
+                    </div>
+                    <div class="field">
+                      <label for="plan-amount">Planned amount</label>
+                      <input id="plan-amount" type="text" inputmode="decimal" required placeholder="0.00">
+                    </div>
+                    <div id="plan-error" class="error" role="alert"></div>
+                    <div class="form-actions">
+                      <button type="submit" id="plan-save" class="primary">Save category</button>
+                      <button type="button" id="plan-cancel" class="ghost-btn" hidden>Cancel</button>
+                    </div>
+                  </form>
+                </section>
+                <section class="panel">
+                  <h2>Unplanned spending</h2>
+                  <div id="plan-unplanned"></div>
+                </section>
+              </div>
+            </div>
+          </section>
+
           <section id="section-expenses" class="app-section" data-section-panel="expenses" hidden>
             <div class="workspace">
               <section class="expenses-col" aria-label="Expenses">
@@ -164,8 +228,8 @@
 
           <section id="section-categories" class="app-section" data-section-panel="categories" hidden>
             <section class="panel panel-wide">
-              <h2>By category</h2>
-              <p class="col-sub">Totals for expenses logged in this period. Already-spent from the state report is a total only.</p>
+              <h2>Spend by category</h2>
+              <p class="col-sub">A read-only look at where logged expenses went this period. To plan amounts for the biennium, use the Budget page. Already-spent from the state report is a total only.</p>
               <div id="category-totals"></div>
             </section>
           </section>
