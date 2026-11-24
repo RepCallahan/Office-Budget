@@ -4,9 +4,16 @@
  * Budget data is stored in board-level shared pluginData under the short key "b".
  * Trello caps the stringified object at 4096 characters per scope/visibility pair.
  *
- * Stored shape (v2):
- *   { v: 2, t: total, s: startingSpent, p: "YYYY-MM-DD", e: [[id, date, desc, cat, amount, by]] }
- * Category values are an index into CATEGORIES, or a short string for "Other" free text.
+ * Stored shape (v3, backward compatible with v2):
+ *   { v: 3, t: total, s: startingSpent, p: "YYYY-MM-DD",
+ *     e: [[id, date, desc, cat, amount, by]],
+ *     c: [[id, name, planned]] }
+ * Expense "cat" values:
+ *   - a number 0-22: legacy built-in state category (v2 data)
+ *   - "#id": a custom planned category in `c`
+ *   - "*": Other / Unplanned
+ *   - any other string: legacy "Other" free text, or a deleted category's name
+ * `c` is omitted when empty so existing v2 boards stay compact.
  */
 (function (root) {
   var STORAGE_KEY = 'b';
@@ -105,40 +112,122 @@
     return today >= nextBienniumStart(start);
   }
 
+  var UNPLANNED = '*';
+  var CUSTOM_PREFIX = '#';
+  var MAX_CAT_NAME = 40;
+
   function emptyBudget(total, starting, period) {
     var n = Number(total);
     var s = Number(starting);
     return {
-      v: 2,
+      v: 3,
       t: isFinite(n) ? n : DEFAULT_TOTAL,
       s: isFinite(s) ? s : 0,
       p: period || currentBienniumStart(),
-      e: []
+      e: [],
+      c: []
     };
   }
 
+  function parseCategories(raw) {
+    if (!Array.isArray(raw)) return [];
+    var seen = {};
+    var list = [];
+    raw.forEach(function (row) {
+      if (!row) return;
+      var cat;
+      if (Array.isArray(row)) {
+        cat = {
+          id: String(row[0] || ''),
+          name: String(row[1] || '').trim().slice(0, MAX_CAT_NAME),
+          planned: Number(row[2]) || 0
+        };
+      } else {
+        cat = {
+          id: String(row.id || row.i || ''),
+          name: String(row.name || row.n || '').trim().slice(0, MAX_CAT_NAME),
+          planned: Number(row.planned != null ? row.planned : row.a) || 0
+        };
+      }
+      if (!cat.id || !cat.name || seen[cat.id]) return;
+      if (!isFinite(cat.planned) || cat.planned < 0) cat.planned = 0;
+      cat.planned = Math.round(cat.planned * 100) / 100;
+      seen[cat.id] = true;
+      list.push(cat);
+    });
+    return list;
+  }
+
+  function isCustomPacked(packed) {
+    return typeof packed === 'string' && packed.charAt(0) === CUSTOM_PREFIX && packed.length > 1;
+  }
+
+  function customIdFromPacked(packed) {
+    return isCustomPacked(packed) ? packed.slice(1) : '';
+  }
+
+  function packCustomId(id) {
+    return CUSTOM_PREFIX + String(id);
+  }
+
+  function findPlanned(budget, id) {
+    var list = (budget && budget.c) || [];
+    var key = String(id || '');
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].id) === key) return list[i];
+    }
+    return null;
+  }
+
+  function newPlannedId(budget) {
+    var used = {};
+    ((budget && budget.c) || []).forEach(function (cat) { used[String(cat.id)] = true; });
+    var n = 0;
+    var id;
+    do {
+      id = n.toString(36);
+      n += 1;
+    } while (used[id]);
+    return id;
+  }
+
+  function sortPlanned(list) {
+    return (list || []).slice().sort(function (a, b) {
+      var an = String(a.name || '').toLowerCase();
+      var bn = String(b.name || '').toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0;
+    });
+  }
+
   function packCategory(x) {
-    if (!x) return '';
+    if (!x) return UNPLANNED;
     if (typeof x.catPacked !== 'undefined' && x.catPacked !== null && x.catPacked !== '') {
       return x.catPacked;
     }
+    if (x.catId != null && String(x.catId) !== '') return packCustomId(x.catId);
     if (typeof x.catIndex === 'number' && x.catIndex >= 0 && x.catIndex < CATEGORIES.length) {
       if (x.catIndex === OTHER_INDEX) {
         var typed = String(x.catOther || '').trim();
-        return typed ? typed : OTHER_INDEX;
+        return typed ? typed : UNPLANNED;
       }
       return x.catIndex;
     }
     var name = String(x.cat || '').trim();
-    if (!name) return '';
+    if (!name || name === 'Other / Unplanned') return UNPLANNED;
     var idx = CATEGORIES.indexOf(name);
     if (idx >= 0 && idx !== OTHER_INDEX) return idx;
-    if (idx === OTHER_INDEX) return OTHER_INDEX;
+    if (idx === OTHER_INDEX) return UNPLANNED;
     return name;
   }
 
-  function categoryLabel(packed) {
-    if (packed === '' || packed == null) return '';
+  function categoryLabel(packed, budget) {
+    if (packed === UNPLANNED || packed === '' || packed == null) return packed === UNPLANNED ? 'Other / Unplanned' : '';
+    if (isCustomPacked(packed)) {
+      var found = findPlanned(budget, customIdFromPacked(packed));
+      return found ? found.name : packed.slice(1);
+    }
     if (typeof packed === 'number') {
       return CATEGORIES[packed] || 'Other';
     }
@@ -147,27 +236,32 @@
     return String(packed);
   }
 
-  function categoryGroupLabel(packed) {
-    if (packed === '' || packed == null) return 'Uncategorized';
+  function categoryGroupLabel(packed, budget) {
+    if (packed === UNPLANNED || packed === '' || packed == null) return 'Other / Unplanned';
+    if (isCustomPacked(packed)) return categoryLabel(packed, budget);
     if (typeof packed === 'number') {
       return CATEGORIES[packed] || 'Other';
     }
     var idx = CATEGORIES.indexOf(String(packed));
-    if (idx >= 0) return CATEGORIES[idx];
-    return 'Other — ' + packed;
+    if (idx >= 0 && idx !== OTHER_INDEX) return CATEGORIES[idx];
+    if (idx === OTHER_INDEX) return 'Other / Unplanned';
+    return String(packed);
   }
 
-  function unpackCategory(packed) {
-    var label = categoryLabel(packed);
+  function unpackCategory(packed, budget) {
+    var label = categoryLabel(packed, budget);
     var index = OTHER_INDEX;
     var other = '';
-    if (typeof packed === 'number' && packed >= 0 && packed < CATEGORIES.length) {
+    var catId = customIdFromPacked(packed);
+    if (isCustomPacked(packed) || packed === UNPLANNED) {
+      index = -1;
+    } else if (typeof packed === 'number' && packed >= 0 && packed < CATEGORIES.length) {
       index = packed;
     } else if (packed != null && packed !== '') {
       var found = CATEGORIES.indexOf(String(packed));
       if (found >= 0) index = found;
       else {
-        index = OTHER_INDEX;
+        index = -1;
         other = String(packed);
       }
     } else {
@@ -175,14 +269,15 @@
     }
     if (index === OTHER_INDEX && typeof packed === 'number') other = '';
     return {
-      catPacked: packed === '' || packed == null ? '' : packed,
+      catPacked: packed === '' || packed == null ? UNPLANNED : packed,
       catIndex: index,
       catOther: other,
-      cat: other || label
+      catId: catId,
+      cat: other || label || 'Other / Unplanned'
     };
   }
 
-  function parseExpense(row) {
+  function parseExpense(row, budget) {
     if (!row) return null;
     var packed;
     var base;
@@ -196,7 +291,7 @@
         by: String(row[5] || '')
       };
     } else if (typeof row === 'object') {
-      packed = row.catPacked != null ? row.catPacked : (row.catIndex != null ? packCategory(row) : (row.cat || row.c));
+      packed = row.catPacked != null && row.catPacked !== '' ? row.catPacked : (row.catId || row.catIndex != null ? packCategory(row) : (row.cat || row.c));
       base = {
         id: String(row.id || row.i || ''),
         date: String(row.date || row.d || ''),
@@ -207,10 +302,11 @@
     } else {
       return null;
     }
-    var cat = unpackCategory(packed);
+    var cat = unpackCategory(packed, budget);
     base.catPacked = cat.catPacked;
     base.catIndex = cat.catIndex;
     base.catOther = cat.catOther;
+    base.catId = cat.catId;
     base.cat = cat.cat;
     return base;
   }
@@ -221,18 +317,21 @@
       return emptyBudget(raw);
     }
     if (typeof raw !== 'object') return null;
-    return {
-      v: 2,
+    var budget = {
+      v: 3,
       t: Number(raw.t) || 0,
       s: Number(raw.s) || 0,
       p: raw.p ? String(raw.p) : currentBienniumStart(),
-      e: Array.isArray(raw.e) ? raw.e.map(parseExpense).filter(Boolean) : []
+      e: [],
+      c: parseCategories(raw.c)
     };
+    budget.e = Array.isArray(raw.e) ? raw.e.map(function (row) { return parseExpense(row, budget); }).filter(Boolean) : [];
+    return budget;
   }
 
   function serialize(budget) {
-    return {
-      v: 2,
+    var packed = {
+      v: 3,
       t: Number(budget && budget.t) || 0,
       s: Number(budget && budget.s) || 0,
       p: String((budget && budget.p) || ''),
@@ -247,6 +346,13 @@
         ];
       })
     };
+    var cats = parseCategories(budget && budget.c);
+    if (cats.length) {
+      packed.c = cats.map(function (cat) {
+        return [String(cat.id), String(cat.name).slice(0, MAX_CAT_NAME), Number(cat.planned) || 0];
+      });
+    }
+    return packed;
   }
 
   function storageSize(budget) {
@@ -386,17 +492,19 @@
 
   function withMeta(budget, extras) {
     var next = {
-      v: 2,
+      v: 3,
       t: budget.t,
       s: startingSpentOf(budget),
       p: budget.p || currentBienniumStart(),
-      e: (budget.e || []).slice()
+      e: (budget.e || []).slice(),
+      c: parseCategories(budget && budget.c)
     };
     if (extras) {
       if (typeof extras.t !== 'undefined') next.t = extras.t;
       if (typeof extras.s !== 'undefined') next.s = extras.s;
       if (typeof extras.p !== 'undefined') next.p = extras.p;
       if (typeof extras.e !== 'undefined') next.e = extras.e;
+      if (typeof extras.c !== 'undefined') next.c = parseCategories(extras.c);
     }
     return next;
   }
@@ -430,7 +538,66 @@
 
   function startNewPeriod(budget, today) {
     var start = periodStartForReset(budget, today);
-    return emptyBudget(DEFAULT_TOTAL, 0, start);
+    var next = emptyBudget(DEFAULT_TOTAL, 0, start);
+    next.c = parseCategories(budget && budget.c);
+    return next;
+  }
+
+  function upsertPlannedCategory(budget, fields) {
+    var next = withMeta(budget);
+    var name = String((fields && fields.name) || '').trim().slice(0, MAX_CAT_NAME);
+    var planned = Number(fields && fields.planned);
+    if (!name) {
+      var err = new Error('NAME');
+      err.code = 'NAME';
+      throw err;
+    }
+    if (!isFinite(planned) || planned < 0) {
+      var amtErr = new Error('AMOUNT');
+      amtErr.code = 'AMOUNT';
+      throw amtErr;
+    }
+    planned = Math.round(planned * 100) / 100;
+    var id = fields && fields.id != null && String(fields.id) !== '' ? String(fields.id) : newPlannedId(next);
+    var lower = name.toLowerCase();
+    for (var i = 0; i < next.c.length; i++) {
+      if (String(next.c[i].id) !== id && String(next.c[i].name).toLowerCase() === lower) {
+        var dup = new Error('DUP');
+        dup.code = 'DUP';
+        throw dup;
+      }
+    }
+    var found = false;
+    for (var j = 0; j < next.c.length; j++) {
+      if (String(next.c[j].id) === id) {
+        next.c[j] = { id: id, name: name, planned: planned };
+        found = true;
+        break;
+      }
+    }
+    if (!found) next.c.push({ id: id, name: name, planned: planned });
+    return next;
+  }
+
+  function deletePlannedCategory(budget, id) {
+    var next = withMeta(budget);
+    var cat = findPlanned(next, id);
+    if (!cat) return next;
+    var packed = packCustomId(id);
+    next.e = next.e.map(function (item) {
+      var itemPacked = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
+      if (itemPacked !== packed) return item;
+      var copy = {};
+      Object.keys(item).forEach(function (key) { copy[key] = item[key]; });
+      copy.catPacked = cat.name;
+      copy.catId = '';
+      copy.catIndex = -1;
+      copy.catOther = cat.name;
+      copy.cat = cat.name;
+      return copy;
+    });
+    next.c = next.c.filter(function (row) { return String(row.id) !== String(id); });
+    return next;
   }
 
   function sortExpenses(list) {
@@ -448,7 +615,7 @@
     var order = [];
     ((budget && budget.e) || []).forEach(function (item) {
       var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
-      var label = categoryGroupLabel(packed);
+      var label = categoryGroupLabel(packed, budget);
       if (!groups[label]) {
         groups[label] = 0;
         order.push(label);
@@ -461,6 +628,70 @@
       if (b.amount !== a.amount) return b.amount - a.amount;
       return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
     });
+  }
+
+  function moneyRound(value) {
+    return Math.round((Number(value) || 0) * 100) / 100;
+  }
+
+  function plannedTracking(budget) {
+    var spentById = {};
+    var unplannedGroups = {};
+    var unplannedOrder = [];
+    var unplannedSpent = 0;
+    ((budget && budget.e) || []).forEach(function (item) {
+      var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
+      var amount = Number(item.amount) || 0;
+      if (isCustomPacked(packed) && findPlanned(budget, customIdFromPacked(packed))) {
+        var id = customIdFromPacked(packed);
+        spentById[id] = (spentById[id] || 0) + amount;
+      } else {
+        unplannedSpent += amount;
+        var label = categoryGroupLabel(packed, budget);
+        if (!unplannedGroups[label]) {
+          unplannedGroups[label] = 0;
+          unplannedOrder.push(label);
+        }
+        unplannedGroups[label] += amount;
+      }
+    });
+    var categories = sortPlanned((budget && budget.c) || []).map(function (cat) {
+      var spent = moneyRound(spentById[cat.id] || 0);
+      var planned = moneyRound(cat.planned);
+      var left = moneyRound(planned - spent);
+      var usedPct = planned > 0 ? Math.round((spent / planned) * 100) : (spent > 0 ? 100 : 0);
+      var status = 'ok';
+      if (spent > planned || (planned === 0 && spent > 0)) status = 'over';
+      else if (planned > 0 && usedPct >= 90) status = 'warn';
+      return {
+        id: cat.id,
+        name: cat.name,
+        planned: planned,
+        spent: spent,
+        left: left,
+        usedPct: usedPct,
+        status: status
+      };
+    });
+    var totalPlanned = 0;
+    categories.forEach(function (row) { totalPlanned += row.planned; });
+    totalPlanned = moneyRound(totalPlanned);
+    var biennium = moneyRound(budget && budget.t);
+    var unallocated = moneyRound(biennium - totalPlanned);
+    return {
+      categories: categories,
+      totalPlanned: totalPlanned,
+      biennium: biennium,
+      unallocated: unallocated,
+      overPlanned: unallocated < 0,
+      unplannedSpent: moneyRound(unplannedSpent),
+      unplannedGroups: unplannedOrder.map(function (label) {
+        return { label: label, amount: moneyRound(unplannedGroups[label]) };
+      }).sort(function (a, b) {
+        if (b.amount !== a.amount) return b.amount - a.amount;
+        return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+      })
+    };
   }
 
   function frontBadges(budget) {
@@ -577,7 +808,17 @@
     nextBienniumStart: nextBienniumStart,
     periodStartForReset: periodStartForReset,
     needsPeriodReset: needsPeriodReset,
+    UNPLANNED: UNPLANNED,
+    CUSTOM_PREFIX: CUSTOM_PREFIX,
+    MAX_CAT_NAME: MAX_CAT_NAME,
     emptyBudget: emptyBudget,
+    parseCategories: parseCategories,
+    isCustomPacked: isCustomPacked,
+    customIdFromPacked: customIdFromPacked,
+    packCustomId: packCustomId,
+    findPlanned: findPlanned,
+    newPlannedId: newPlannedId,
+    sortPlanned: sortPlanned,
     packCategory: packCategory,
     unpackCategory: unpackCategory,
     categoryLabel: categoryLabel,
@@ -609,8 +850,11 @@
     deleteExpense: deleteExpense,
     rollUp: rollUp,
     startNewPeriod: startNewPeriod,
+    upsertPlannedCategory: upsertPlannedCategory,
+    deletePlannedCategory: deletePlannedCategory,
     sortExpenses: sortExpenses,
     categoryTotals: categoryTotals,
+    plannedTracking: plannedTracking,
     frontBadges: frontBadges,
     detailBadges: detailBadges,
     applyTheme: applyTheme,
