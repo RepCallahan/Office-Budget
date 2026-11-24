@@ -1,0 +1,119 @@
+# Budget Sync — setup guide
+
+This is a free, private Trello Power-Up for the Callahan Office board. It keeps the office **biennium budget** on the board itself, not on a card. You will see an **Office Budget** button in the board header. Click it to open a wide window with a green number for how much is left, a red number for how much has been spent, and the percent remaining.
+
+The default biennium budget is **$25,000**. You can also enter how much is already spent from the state report (the October 2026 AD35 report was **$22,473.29**), then log new expenses on top. You and Amy-Rose can add expenses inside that window. There is no Google Sheet, and you do not need a Trello API key or token.
+
+Everything below can be done in a web browser, on a computer. Plan on about 10 minutes.
+
+---
+
+## Before you start
+
+1. Unzip the `trello-budget-powerup` folder if you have not already. You should see files named `index.html`, `budget.html`, `README.md`, and folders named `js`, `css`, and `img`.
+2. Have your GitHub login ready. A free account is enough. If you do not have one, go to [github.com](https://github.com) and click **Sign up**.
+3. Stay signed in to Trello as the account that can change the Callahan Office board.
+
+**If you already uploaded an earlier copy of Budget Sync to GitHub**, upload these new files over the old ones (replace them). You can delete leftover files from the old card version (`expense.html`, `section.html`, `report.html`, and the `settings` folder) if they are still in the repository. After GitHub Pages updates, skip to Part 3, step 6 and make sure only **board-buttons** is turned on. Then go to Part 5.
+
+**Important:** If you already created a Trello app called Budget Sync and chose “My app doesn’t use Power-up capabilities,” that one cannot be changed. You will create a **new** app below and pick the option that **does** use Power-Up capabilities.
+
+---
+
+## Part 1. Put the files on GitHub (this hosts them for free)
+
+1. Open [github.com](https://github.com) and sign in.
+2. Click the green **New** button (or go to [github.com/new](https://github.com/new)).
+3. For **Repository name**, type `trello-budget-powerup`.
+4. Under the Public / Private choice, pick **Public**. Free hosting only works if the folder is public. These files have no passwords or keys in them, so that is fine.
+5. Leave the other checkboxes unchecked. You do not need a README, gitignore, or license — this folder already has a README.
+6. Click **Create repository**.
+7. On the empty repository page, click **uploading an existing file**.
+8. Open the unzipped `trello-budget-powerup` folder on your computer. Select **everything inside it** (`index.html`, `budget.html`, `README.md`, and the `js`, `css`, and `img` folders) and drag those items onto the GitHub page.
+
+   Drag the files *inside* the folder, not the folder itself. When you are done, you should see `index.html` at the top of the file list, not a single folder named `trello-budget-powerup`.
+9. Click **Commit changes**.
+
+---
+
+## Part 2. Turn on free GitHub Pages
+
+1. In the same repository, click the **Settings** tab at the top.
+2. On the left, click **Pages**.
+3. Under **Build and deployment**, find **Source**. Choose **Deploy from a branch**.
+4. For **Branch**, choose **main** (or **master**, if that is the only option). Leave the folder set to **/ (root)**.
+5. Click **Save**.
+6. Wait about a minute, then refresh the page. GitHub will show a web address that looks like:
+
+   `https://YOUR-USERNAME.github.io/trello-budget-powerup/`
+
+   Copy that address. It should end in `github.io`, not `github.com`.
+7. Open the address in a new tab. You should see a short page titled **Budget Sync**. That means hosting is working.
+
+   If you see “404” or “page not found,” wait a couple of minutes and try again. If it still fails, go back to Settings → Pages and confirm the branch is saved, and that `index.html` is at the top level of the repository (Part 1, step 8).
+
+---
+
+## Part 3. Register the Power-Up in Trello
+
+1. Open [trello.com/power-ups/admin](https://trello.com/power-ups/admin) while signed into Trello.
+2. Click **New** (or **Create Power-Up**).
+3. When it asks about Power-Up capabilities, choose **My app will use Power-up capabilities**. This is the important choice. Do not pick the other one.
+4. Fill in the form like this:
+   - **App name:** `Budget Sync`
+   - **Workspace:** Callahan Office
+   - **Email:** your email (for example, repcallahan@gmail.com)
+   - **Support contact:** the same email
+   - **Author:** Calvin Callahan
+   - **Iframe connector URL:** paste the GitHub address from Part 2 (the one that looks like `https://YOUR-USERNAME.github.io/trello-budget-powerup/`). It must start with `https://` and include `github.io`.
+5. Click **Create**.
+6. Open the new Budget Sync app and find the **Capabilities** section. Turn on **only** this one:
+   - **board-buttons** (Board buttons)
+
+   If an older copy had **card-badges**, **card-detail-badges**, **card-back-section**, or **card-buttons** turned on, turn those off. Nothing should appear on individual cards.
+7. Save if Trello asks you to. Leave the OAuth / API key section blank. This Power-Up does not use them.
+
+---
+
+## Part 4. Add it to the Callahan Office board
+
+1. Open your **Callahan Office** board in Trello.
+2. Click **Power-Ups** (on the right side of the board, or under the board menu).
+3. Look for **Custom**, or search for **Budget Sync**.
+4. Click **Add** next to Budget Sync.
+
+If you do not see it, confirm the Power-Up was created in the Callahan Office workspace (Part 3, step 4), then refresh the board and try again.
+
+---
+
+## Part 5. Open the budget
+
+1. On the Callahan Office board, look in the **board header** (the top bar of the board, not a card). Click **Office Budget**.
+2. The first time, you will be asked to set it up. **Biennium budget** should already say `25000` ($25,000). Leave that unless the state allocation has changed.
+3. In **Already spent (from state report)**, enter the amount from the latest state report. For the October 2026 report (AD35), that is `22473.29`. Then click **Save and open budget**.
+4. You should now see a wide window: a green **Left**, a red **Spent**, and the percent remaining across the top, with the expense list on the left and the add-expense form, category totals, and actions on the right.
+
+Anyone on the board, including Amy-Rose, can use it once it is added. They do not need to repeat this setup. They just click **Office Budget** in the board header.
+
+---
+
+## How to use it day to day
+
+- Click **Office Budget** in the board header to open the budget.
+- To log spending, fill in the form on the right (date, amount, description, and a category from the state list) and click **Save expense**. If none of the categories fit, choose **Other** and type a short name. The person who adds an expense is filled in automatically from their Trello name.
+- To change or delete an expense, use **Edit** or **Delete** in the list on the left. Edit fills the form on the right; it does not open a second window.
+- To change the $25,000 biennium budget or the already-spent amount from a new state report, use **Budget settings** on the right.
+- If you spend more than the biennium budget, the left number turns red and the window shows **Overspent**.
+- After you reconcile with a new state report, click **Archive / roll up**. That folds all logged expenses into the already-spent amount and clears the list, so the totals stay the same and you have room to keep logging. You will be asked to confirm first.
+- When you are ready to start a new biennium (the next one begins **January 4, 2027**), click **Reset budget**. A printable session report opens first, with the period dates, totals, spending by category, and the full expense list. Click **Print / Save as PDF** and save the file from your browser’s print dialog. Only after that, click **I've saved the report, reset for next session**. That clears expenses and the already-spent amount, sets the biennium budget back to $25,000, and records the new period start date.
+- Trello only lets a Power-Up store a short amount of data on each board. If the budget is getting full, Budget Sync will warn you. Use **Archive / roll up** to free space.
+
+---
+
+## If something does not work
+
+- **The GitHub page says 404.** Wait a few minutes, confirm Pages is set to the `main` branch and `/ (root)`, and confirm `index.html` is at the top of the repository, not inside an extra folder.
+- **Trello says the connector URL is invalid.** You pasted the GitHub *repository* page (`github.com/...`) instead of the Pages address (`https://YOUR-USERNAME.github.io/trello-budget-powerup/`).
+- **I do not see Budget Sync on the board.** Make sure you created a new app that **does** use Power-Up capabilities, in the Callahan Office workspace, and that **board-buttons** in Part 3 is turned on.
+- **I do not see numbers on a card.** That is expected. Nothing appears on cards. Click **Office Budget** in the board header.
+- **I still have the old Google Sheet.** You can leave it or delete it. This Power-Up does not use it.

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Office Budget</title>
+    <link rel="stylesheet" href="./css/app.css">
+    <link rel="stylesheet" href="./css/report.css">
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="view-setup" class="view" hidden>
+        <div class="setup-card">
+          <h1>Set up the office biennium budget</h1>
+          <p class="lede">This budget lives on the board, not on a card. Anyone with the board can open it from the <strong>Office Budget</strong> button in the header.</p>
+          <form id="setup-form">
+            <div class="field">
+              <label for="setup-total">Biennium budget</label>
+              <input id="setup-total" type="text" inputmode="decimal" required value="25000">
+              <span class="hint">Starts at $25,000. You can change this if the state allocation changes.</span>
+            </div>
+            <div class="field">
+              <label for="setup-starting">Already spent (from state report)</label>
+              <input id="setup-starting" type="text" inputmode="decimal" placeholder="0  (e.g. 22473.29)">
+              <span class="hint">The October 2026 report (AD35) was $22,473.29. New expenses are logged on top of this amount.</span>
+            </div>
+            <div id="setup-error" class="error" role="alert"></div>
+            <button type="submit" class="primary">Save and open budget</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="view-budget" class="view" hidden>
+        <aside class="sidebar" aria-label="Budget sections">
+          <div class="sidebar-brand">
+            <img class="sidebar-logo" src="./img/wi-seal.png" width="192" height="200" alt="Wisconsin state seal">
+            <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Budget</span>
+          </div>
+          <nav class="sidebar-nav">
+            <button type="button" class="nav-btn is-active" data-section="overview" aria-current="page">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z"/></svg>
+              Overview
+            </button>
+            <button type="button" class="nav-btn" data-section="expenses">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>
+              Expenses
+            </button>
+            <button type="button" class="nav-btn" data-section="categories">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+              Categories
+            </button>
+            <button type="button" class="nav-btn" data-section="reports">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+              Reports
+            </button>
+            <button type="button" class="nav-btn" data-section="settings">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M4.9 6.3l1.5 1.5M17.6 16.2l1.5 1.5M3 12h2M19 12h2M4.9 17.7l1.5-1.5M17.6 7.8l1.5-1.5"/></svg>
+              Settings
+            </button>
+          </nav>
+        </aside>
+
+        <div class="app-main">
+          <div id="banners"></div>
+
+          <section id="section-overview" class="app-section is-active" data-section-panel="overview">
+            <header class="summary-card">
+              <div class="summary-metrics">
+                <div class="metric">
+                  <span class="metric-label">Left</span>
+                  <span id="hero-left" class="metric-value pill pill-green">$0</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Spent</span>
+                  <span id="hero-spent" class="metric-value pill pill-red">$0</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Remaining</span>
+                  <span id="hero-remain" class="metric-value">0%</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">Biennium budget</span>
+                  <span id="hero-total" class="metric-value is-quiet">$25,000</span>
+                </div>
+                <div class="metric metric-period">
+                  <span class="metric-label">Period</span>
+                  <span id="hero-period" class="metric-value is-quiet is-period">—</span>
+                </div>
+              </div>
+              <div class="used-row">
+                <div class="used-track" aria-hidden="true"><div id="hero-bar" class="used-bar"></div></div>
+                <span id="hero-used" class="used-label">0% used</span>
+              </div>
+            </header>
+            <div class="workspace">
+              <section class="expenses-col" aria-label="Recent expenses">
+                <div class="col-head">
+                  <div>
+                    <h2>Recent expenses</h2>
+                    <p class="col-sub">The latest items logged in this period.</p>
+                  </div>
+                  <button type="button" id="view-all-expenses" class="ghost-btn">View all</button>
+                </div>
+                <div id="recent-table-wrap" class="table-wrap"></div>
+              </section>
+              <div id="form-slot-overview" class="form-slot">
+        <aside id="expense-panel" class="panel panel-accent">
+          <h2 id="form-heading">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Add expense
+          </h2>
+          <form id="expense-form">
+            <div class="field-row">
+              <div class="field">
+                <label for="exp-date">Date</label>
+                <input id="exp-date" type="date" required>
+              </div>
+              <div class="field">
+                <label for="exp-amount">Amount</label>
+                <input id="exp-amount" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="0.00">
+              </div>
+            </div>
+            <div class="field">
+              <label for="exp-desc">Description</label>
+              <input id="exp-desc" type="text" maxlength="80" required placeholder="What was this for?">
+            </div>
+            <div class="field">
+              <label for="exp-category">Category</label>
+              <select id="exp-category" required>
+                <option value="">Choose a category</option>
+              </select>
+              <input id="exp-other" type="text" maxlength="40" placeholder="Describe the category" hidden>
+            </div>
+            <p class="hint">Entered by: <strong id="exp-by">you</strong></p>
+            <div id="exp-error" class="error" role="alert"></div>
+            <div class="form-actions">
+              <button type="submit" id="exp-save" class="primary">Save expense</button>
+              <button type="button" id="exp-cancel" class="ghost-btn" hidden>Cancel</button>
+              <button type="button" id="exp-delete" class="ghost-btn danger" hidden>Delete</button>
+            </div>
+          </form>
+        </aside>
+              </div>
+            </div>
+          </section>
+
+          <section id="section-expenses" class="app-section" data-section-panel="expenses" hidden>
+            <div class="workspace">
+              <section class="expenses-col" aria-label="Expenses">
+                <div class="col-head">
+                  <div>
+                    <h2 id="expense-heading">Expenses</h2>
+                    <p id="expense-sub" class="col-sub"></p>
+                  </div>
+                </div>
+                <div id="expense-table-wrap" class="table-wrap"></div>
+              </section>
+              <div id="form-slot-expenses" class="form-slot"></div>
+            </div>
+          </section>
+
+          <section id="section-categories" class="app-section" data-section-panel="categories" hidden>
+            <section class="panel panel-wide">
+              <h2>By category</h2>
+              <p class="col-sub">Totals for expenses logged in this period. Already-spent from the state report is a total only.</p>
+              <div id="category-totals"></div>
+            </section>
+          </section>
+
+          <section id="section-reports" class="app-section report-section" data-section-panel="reports" hidden>
+            <div class="toolbar no-print">
+              <div class="toolbar-copy">
+                <h2>Session report</h2>
+                <p class="col-sub">Preview the printable report for this period. Save a PDF before you reset for the next session.</p>
+              </div>
+              <div class="toolbar-actions">
+                <button type="button" id="print-btn" class="primary">Print / Save as PDF</button>
+                <button type="button" id="confirm-reset-btn" class="confirm">I've saved the report, reset for next session</button>
+                <button type="button" id="back-btn" class="ghost-btn">Back to overview</button>
+              </div>
+              <div id="report-error" class="error" role="alert"></div>
+            </div>
+            <article id="report" class="page"></article>
+          </section>
+
+          <section id="section-settings" class="app-section" data-section-panel="settings" hidden>
+            <section class="panel settings-card">
+              <h2>Budget settings</h2>
+              <form id="settings-form">
+                <div class="field">
+                  <label for="set-total">Biennium budget</label>
+                  <input id="set-total" type="text" inputmode="decimal" required>
+                </div>
+                <div class="field">
+                  <label for="set-starting">Already spent (from state report)</label>
+                  <input id="set-starting" type="text" inputmode="decimal" required>
+                  <span class="hint">The October 2026 report (AD35) was $22,473.29.</span>
+                </div>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Period start</label>
+                    <p id="set-period-start" class="static-value">—</p>
+                  </div>
+                  <div class="field">
+                    <label>Next biennium</label>
+                    <p id="set-period-end" class="static-value">—</p>
+                  </div>
+                </div>
+                <p class="hint">Period dates change when you reset the budget from Reports, after saving the session report.</p>
+                <div id="set-error" class="error" role="alert"></div>
+                <button type="submit" class="primary">Save settings</button>
+              </form>
+              <div class="more-divider"></div>
+              <h3 class="subhead">Archive</h3>
+              <p class="hint">Fold logged expenses into Already spent and clear the list. Totals stay the same. Use this if Trello’s storage limit is getting full.</p>
+              <button type="button" id="rollup-btn" class="ghost-btn">Archive / roll up</button>
+              <div class="more-divider"></div>
+              <button type="button" id="remove-btn" class="ghost-btn danger">Remove budget from this board</button>
+              <p id="storage-line" class="storage"></p>
+            </section>
+          </section>
+        </div>
+
+      </div>
+    </div>
+    <script src="./js/budget.js"></script>
+    <script src="./js/app.js"></script>
+  </body>
+</html>

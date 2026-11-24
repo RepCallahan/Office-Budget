@@ -1,0 +1,160 @@
+/* Professional, quiet print report. Buttons hide when printing. */
+
+:root {
+  --ink: #111827;
+  --muted: #6b7280;
+  --rule: #111827;
+  --line: #e5e7eb;
+  --paper: #ffffff;
+  --shade: #f9fafb;
+}
+
+* { box-sizing: border-box; }
+
+.report-view {
+  background: #f6f7f9;
+  min-height: 100vh;
+}
+
+.page {
+  width: 8.5in;
+  max-width: 100%;
+  margin: 24px auto 40px;
+  padding: 0.75in 0.8in 0.9in;
+  background: var(--paper);
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px rgba(17, 24, 39, 0.06);
+  color: var(--ink);
+  font-family: ui-sans-serif, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.5;
+  border-radius: 8px;
+}
+
+.letterhead {
+  border-bottom: 1px solid var(--ink);
+  padding: 0 0 16px;
+  margin-bottom: 22px;
+}
+
+.letterhead .district {
+  margin: 0;
+  font-size: 10pt;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.letterhead .name {
+  margin: 6px 0 0;
+  font-size: 20pt;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.letterhead .title {
+  margin: 2px 0 0;
+  font-size: 12pt;
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 32px;
+  margin: 0 0 22px;
+  font-size: 10.5pt;
+}
+
+.meta dt { font-weight: 650; margin: 0; color: var(--muted); font-size: 9pt; text-transform: uppercase; letter-spacing: 0.06em; }
+.meta dd { margin: 0 0 10px; }
+
+.page h2 {
+  margin: 22px 0 10px;
+  font-size: 10pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 650;
+  color: var(--muted);
+  border: 0;
+  padding: 0;
+}
+
+.page table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  margin: 0 0 8px;
+}
+
+.page th, .page td {
+  text-align: left;
+  padding: 7px 8px 7px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.page th {
+  background: transparent;
+  font-weight: 650;
+  font-size: 8.5pt;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--ink);
+}
+
+.page td.num, .page th.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  padding-right: 0;
+}
+
+.page tfoot td {
+  font-weight: 650;
+  border-top: 1px solid var(--ink);
+  border-bottom: 0;
+  background: transparent;
+}
+
+.page .totals { width: 100%; max-width: 26rem; margin-left: auto; }
+.page .totals th {
+  background: transparent;
+  font-weight: 400;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10pt;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.page .totals td { border-bottom: 1px solid var(--line); }
+.page .totals tr.grand th,
+.page .totals tr.grand td {
+  font-weight: 650;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  background: transparent;
+}
+
+.page .note { margin-top: 24px; font-size: 8.5pt; color: var(--muted); }
+.page .empty { font-style: italic; color: var(--muted); }
+
+@media print {
+  html, body, .report-view { background: #fff; }
+  .toolbar, .no-print { display: none !important; }
+  .page {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    border-radius: 0;
+  }
+  @page { size: letter; margin: 0.65in 0.7in; }
+  .page h2 { break-after: avoid; }
+  .page tr { break-inside: avoid; }
+}
