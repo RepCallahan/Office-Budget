@@ -119,6 +119,8 @@ function fillCategorySelect(budget, selectedPacked) {
     select.appendChild(el('option', { value: BudgetSync.packCustomId(cat.id), text: cat.name }));
   });
   select.appendChild(el('option', { value: BudgetSync.UNPLANNED, text: 'Other / Unplanned' }));
+  var linked = (current !== '' && current != null) ? BudgetSync.resolvePlannedCategory(current, budget) : null;
+  if (linked) current = BudgetSync.packCustomId(linked.id);
   if (current !== '' && current != null && current !== BudgetSync.UNPLANNED && !BudgetSync.isCustomPacked(current)) {
     var label = BudgetSync.categoryLabel(current, budget) || String(current);
     select.appendChild(el('option', { value: String(current), text: label + ' (from earlier expenses)' }));
@@ -228,11 +230,11 @@ function renderSummary(budget) {
   var usedLabel = document.getElementById('hero-used');
   usedLabel.className = 'used-label' + (nearLimit ? (over ? ' is-over' : ' is-warn') : '');
   text(usedLabel, (over ? usedPct : Math.max(0, usedPct)) + '% used');
-  var starting = BudgetSync.startingSpentOf(budget);
+  var starting = BudgetSync.effectiveStartingOf(budget);
   var logged = BudgetSync.loggedSpentOf(budget);
   var sub = document.getElementById('expense-sub');
-  if (starting && logged) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' from the state report, plus ' + BudgetSync.formatMoney(logged) + ' logged here.');
-  else if (starting) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' already spent from the state report.');
+  if (starting && logged) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' already spent, plus ' + BudgetSync.formatMoney(logged) + ' logged here.');
+  else if (starting) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' already spent.');
   else if (logged) text(sub, BudgetSync.formatMoney(logged) + ' logged here.');
   else text(sub, 'No spending logged yet.');
   text(document.getElementById('expense-heading'), budget.e.length === 1 ? '1 expense' : budget.e.length + ' expenses');
@@ -272,7 +274,7 @@ function renderCategories(budget) {
   });
   var hasPlanned = track.categories.length > 0;
   if (!plannedSpend.length && !track.unplannedGroups.length) {
-    host.appendChild(el('p', { className: 'empty-table', text: 'No expenses logged in this period yet. Already-spent from the state report is a total only.' }));
+    host.appendChild(el('p', { className: 'empty-table', text: 'No category spending to show yet.' }));
   } else if (hasPlanned) {
     var plannedBox = el('div', { className: 'cat-group' }, [el('h3', { text: 'Planned categories' })]);
     renderSpendList(plannedBox, plannedSpend, 'No spending has been logged against a planned category yet.');
@@ -531,6 +533,10 @@ function renderSettings(budget) {
   var storage = document.getElementById('storage-line');
   storage.className = 'storage' + (info.full ? ' is-full' : info.warn ? ' is-warn' : '');
   text(storage, 'Storage used: ' + info.percent + '% of Trello’s board limit (' + info.used + ' of ' + info.limit + ' characters).');
+  var ver = document.getElementById('app-version');
+  if (ver) text(ver, 'v' + BudgetSync.ASSET_VERSION);
+  var restoreBtn = document.getElementById('restore-cats-btn');
+  if (restoreBtn) restoreBtn.disabled = !canWrite;
   if (info.full) document.getElementById('exp-save').disabled = true;
   var urlField = document.getElementById('webhook-url');
   if (urlField && document.activeElement !== urlField) urlField.value = budget.k || '';
@@ -609,13 +615,29 @@ function showLoadedBudget(budget) {
   return maybeAutoSend(budget);
 }
 
+function showAppToast(message, kind) {
+  var box = document.getElementById('app-toast');
+  if (!box) {
+    window.alert(message);
+    return;
+  }
+  box.className = 'banner ' + (kind === 'over' ? 'banner-over' : 'banner-warn');
+  box.hidden = !message;
+  text(box, message || '');
+}
+
 function maybeSeedCategories(budget) {
   if (!budget || !canWrite) return Promise.resolve(budget);
   var seeded = BudgetSync.ensureOfficeCategories(budget);
-  if (!seeded.changed) return Promise.resolve(budget);
-  return BudgetSync.save(t, seeded.budget).then(function () {
+  var relinked = BudgetSync.relinkExpenses(seeded.budget);
+  if (!seeded.changed && !relinked.changed) return Promise.resolve(budget);
+  return BudgetSync.save(t, relinked.budget).then(function () {
     return BudgetSync.load(t);
-  }).catch(function () {
+  }).catch(function (err) {
+    showAppToast(
+      (err && err.code === 'FULL') ? BudgetSync.fullMessage() : 'Could not save the office categories. Please try again.',
+      'warn'
+    );
     return budget;
   });
 }
@@ -782,7 +804,7 @@ function renderReport(budget) {
   reportEl.appendChild(el('h2', { text: 'Budget summary' }));
   reportEl.appendChild(el('table', { className: 'totals' }, [el('tbody', null, [
     el('tr', null, [el('th', { text: 'Biennium budget' }), el('td', { className: 'num', text: moneyReport(budget.t) })]),
-    el('tr', null, [el('th', { text: 'Already spent (from state report)' }), el('td', { className: 'num', text: moneyReport(starting) })]),
+    el('tr', null, [el('th', { text: 'Already spent' }), el('td', { className: 'num', text: moneyReport(BudgetSync.effectiveStartingOf(budget)) })]),
     el('tr', null, [el('th', { text: 'Expenses logged this period' }), el('td', { className: 'num', text: moneyReport(logged) })]),
     el('tr', { className: 'grand' }, [el('th', { text: 'Total spent' }), el('td', { className: 'num', text: moneyReport(spent) })]),
     el('tr', { className: 'grand' }, [el('th', { text: 'Total remaining' }), el('td', { className: 'num', text: moneyReport(left) })]),
@@ -947,6 +969,28 @@ document.getElementById('plan-form').addEventListener('submit', function (event)
 });
 
 document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
+
+
+document.getElementById('restore-cats-btn').addEventListener('click', function () {
+  if (!canWrite || !currentBudget) return;
+  var ok = window.confirm(
+    'Restore the office categories? Existing categories are kept and not duplicated. For this session, starting spend is filled in only on categories that have no spending yet.'
+  );
+  if (!ok) return;
+  BudgetSync.load(t).then(function (budget) {
+    if (!budget) return;
+    var restored = BudgetSync.ensureOfficeCategories(budget, { force: true });
+    var relinked = BudgetSync.relinkExpenses(restored.budget);
+    return BudgetSync.save(t, relinked.budget).then(function () {
+      resetPlanForm();
+      return refresh();
+    });
+  }).catch(function (err) {
+    if (err && err.code === 'FULL') window.alert(BudgetSync.fullMessage());
+    else window.alert('Could not restore the office categories. Please try again.');
+  });
+});
+
 
 document.getElementById('webhook-form').addEventListener('submit', function (event) {
   event.preventDefault();

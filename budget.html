@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Office Budget</title>
-    <link rel="stylesheet" href="./css/app.css?v=20261124d">
-    <link rel="stylesheet" href="./css/report.css?v=20261124d">
+    <link rel="stylesheet" href="./css/app.css?v=20261124e">
+    <link rel="stylesheet" href="./css/report.css?v=20261124e">
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
   </head>
   <body>
@@ -34,7 +34,7 @@
       <div id="view-budget" class="view" hidden>
         <aside class="sidebar" aria-label="Budget sections">
           <div class="sidebar-brand">
-            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261124d" width="192" height="200" alt="Wisconsin state seal">
+            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261124e" width="192" height="200" alt="Wisconsin state seal">
             <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Budget</span>
           </div>
           <nav class="sidebar-nav">
@@ -71,6 +71,7 @@
 
         <div class="app-main">
           <div id="banners"></div>
+          <p id="app-toast" class="banner" hidden role="status"></p>
 
           <section id="section-overview" class="app-section is-active" data-section-panel="overview">
             <header class="summary-card">
@@ -235,7 +236,7 @@
           <section id="section-categories" class="app-section" data-section-panel="categories" hidden>
             <section class="panel panel-wide">
               <h2>Spend by category</h2>
-              <p class="col-sub">A read-only look at where logged expenses went this period. To plan amounts for the biennium, use the Budget page. Already-spent from the state report is a total only.</p>
+              <p class="col-sub">A read-only look at where spending went this period, including amounts already on each category. To plan amounts for the biennium, use the Budget page.</p>
               <div id="category-totals"></div>
             </section>
           </section>
@@ -300,12 +301,17 @@
               <p class="hint" id="webhook-status"></p>
               <p class="error" id="webhook-error" role="alert"></p>
               <div class="more-divider"></div>
+              <h3 class="subhead">Office categories</h3>
+              <p class="hint">If the office category list is missing or incomplete, restore it. Categories you already have are kept and not duplicated. Starting spend is filled in only on categories that have no spending yet.</p>
+              <button type="button" id="restore-cats-btn" class="ghost-btn">Restore office categories</button>
+              <div class="more-divider"></div>
               <h3 class="subhead">Archive</h3>
               <p class="hint">Fold logged expenses into Already spent and clear the list. Totals stay the same. Use this if Trello’s storage limit is getting full.</p>
               <button type="button" id="rollup-btn" class="ghost-btn">Archive / roll up</button>
               <div class="more-divider"></div>
               <button type="button" id="remove-btn" class="ghost-btn danger">Remove budget from this board</button>
               <p id="storage-line" class="storage"></p>
+              <p id="app-version" class="version-line"></p>
             </section>
             </div>
           </section>
@@ -313,7 +319,7 @@
 
       </div>
     </div>
-    <script src="./js/budget.js?v=20261124d"></script>
-    <script src="./js/app.js?v=20261124d"></script>
+    <script src="./js/budget.js?v=20261124e"></script>
+    <script src="./js/app.js?v=20261124e"></script>
   </body>
 </html>

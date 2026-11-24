@@ -55,7 +55,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261124d';
+  var ASSET_VERSION = '20261124e';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
@@ -279,7 +279,31 @@
     return name;
   }
 
-  function categoryLabel(packed, budget) {
+  function normalizeCatName(name) {
+    return String(name || '')
+      .toLowerCase()
+      .replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  /* Unambiguous maps from the old built-in state-report names to office categories. */
+  var CATEGORY_ALIASES = {
+    'blue book miscellaneous': 'Blue Book Misc',
+    'in district travel staff': 'In-District Travel - Staff',
+    'internet': "Calvin's Internet",
+    'maint repair st owned bldg': 'Maintenance and Repair',
+    'materials and supplies': 'Material and Office Supplies',
+    'out state travel leg': 'Out of State Travel',
+    'postage bulk mail': 'Postage - Bulk',
+    'postage metered mail': 'Postage - Metered',
+    'print business cards': 'Print - Business Cards',
+    'print note cards': 'Print - Notecards',
+    'registration fee leg': 'Registration Fee'
+  };
+
+  function rawCategoryLabel(packed, budget) {
     if (packed === UNPLANNED || packed === '' || packed == null) return packed === UNPLANNED ? 'Other / Unplanned' : '';
     if (isCustomPacked(packed)) {
       var found = findPlanned(budget, customIdFromPacked(packed));
@@ -293,9 +317,45 @@
     return String(packed);
   }
 
+  function findPlannedByName(budget, name) {
+    var list = (budget && budget.c) || [];
+    var raw = String(name || '').trim();
+    if (!raw) return null;
+    var norm = normalizeCatName(raw);
+    if (CATEGORY_ALIASES[norm]) {
+      raw = CATEGORY_ALIASES[norm];
+      norm = normalizeCatName(raw);
+    }
+    var lower = raw.toLowerCase();
+    var i;
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i].name || '').toLowerCase() === lower) return list[i];
+    }
+    for (i = 0; i < list.length; i++) {
+      if (normalizeCatName(list[i].name) === norm) return list[i];
+    }
+    return null;
+  }
+
+  function resolvePlannedCategory(packed, budget) {
+    if (isCustomPacked(packed)) {
+      var byId = findPlanned(budget, customIdFromPacked(packed));
+      if (byId) return byId;
+    }
+    return findPlannedByName(budget, rawCategoryLabel(packed, budget));
+  }
+
+  function categoryLabel(packed, budget) {
+    var linked = resolvePlannedCategory(packed, budget);
+    if (linked) return linked.name;
+    return rawCategoryLabel(packed, budget);
+  }
+
   function categoryGroupLabel(packed, budget) {
+    var linked = resolvePlannedCategory(packed, budget);
+    if (linked) return linked.name;
     if (packed === UNPLANNED || packed === '' || packed == null) return 'Other / Unplanned';
-    if (isCustomPacked(packed)) return categoryLabel(packed, budget);
+    if (isCustomPacked(packed)) return rawCategoryLabel(packed, budget);
     if (typeof packed === 'number') {
       return CATEGORIES[packed] || 'Other';
     }
@@ -483,8 +543,23 @@
     return t.set('board', 'shared', STORAGE_KEY, null);
   }
 
+  function alreadyTotalOf(budget) {
+    var sum = 0;
+    ((budget && budget.c) || []).forEach(function (cat) {
+      sum += Number(cat.already) || 0;
+    });
+    return moneyRound(sum);
+  }
+
   function startingSpentOf(budget) {
-    return Math.round((Number(budget && budget.s) || 0) * 100) / 100;
+    return moneyRound(budget && budget.s);
+  }
+
+  /* Overall already-spent is at least the sum of per-category carried-in
+     amounts, so a board with s=0 still counts category starting spend.
+     If s is larger, the extra is unitemized. Never add both. */
+  function effectiveStartingOf(budget) {
+    return moneyRound(Math.max(startingSpentOf(budget), alreadyTotalOf(budget)));
   }
 
   function loggedSpentOf(budget) {
@@ -493,11 +568,11 @@
     for (var i = 0; i < budget.e.length; i++) {
       sum += Number(budget.e[i].amount) || 0;
     }
-    return Math.round(sum * 100) / 100;
+    return moneyRound(sum);
   }
 
   function spentOf(budget) {
-    return Math.round((startingSpentOf(budget) + loggedSpentOf(budget)) * 100) / 100;
+    return moneyRound(effectiveStartingOf(budget) + loggedSpentOf(budget));
   }
 
   function leftOf(budget) {
@@ -775,8 +850,9 @@
     ((budget && budget.e) || []).forEach(function (item) {
       var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
       var amount = Number(item.amount) || 0;
-      if (isCustomPacked(packed) && findPlanned(budget, customIdFromPacked(packed))) {
-        var id = customIdFromPacked(packed);
+      var linked = resolvePlannedCategory(packed, budget);
+      if (linked) {
+        var id = linked.id;
         spentById[id] = (spentById[id] || 0) + amount;
       } else {
         unplannedLogged += amount;
@@ -1019,10 +1095,49 @@
     return period < '2027-01-04';
   }
 
-  function ensureOfficeCategories(budget) {
+  function categoryHasSpend(budget, cat) {
+    var already = Number(cat && cat.already) || 0;
+    if (already > 0) return true;
+    var packedWant = packCustomId(cat.id);
+    var i;
+    for (i = 0; i < ((budget && budget.e) || []).length; i++) {
+      var item = budget.e[i];
+      var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
+      var linked = resolvePlannedCategory(packed, budget);
+      if (linked && String(linked.id) === String(cat.id)) return true;
+      if (packed === packedWant) return true;
+    }
+    return false;
+  }
+
+  function relinkExpenses(budget) {
     var next = withMeta(budget);
-    if (next.f) {
-      return { budget: next, changed: false, added: 0, droppedZero: false };
+    var changed = false;
+    next.e = (next.e || []).map(function (item) {
+      var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
+      var cat = resolvePlannedCategory(packed, next);
+      if (!cat) return item;
+      var want = packCustomId(cat.id);
+      if (String(packed) === want) return item;
+      var copy = {};
+      Object.keys(item).forEach(function (key) { copy[key] = item[key]; });
+      copy.catPacked = want;
+      copy.catId = cat.id;
+      copy.cat = cat.name;
+      copy.catIndex = -1;
+      copy.catOther = '';
+      changed = true;
+      return copy;
+    });
+    return { budget: next, changed: changed };
+  }
+
+  function ensureOfficeCategories(budget, options) {
+    options = options || {};
+    var force = !!options.force;
+    var next = withMeta(budget);
+    if (next.f && !force && next.c && next.c.length) {
+      return { budget: next, changed: false, added: 0, updated: 0, droppedZero: false };
     }
     var groups = parseGroups(next.g);
     OFFICE_GROUPS.forEach(function (name) { ensureGroupIndex(groups, name); });
@@ -1032,12 +1147,18 @@
     });
     var carry = shouldCarryInStarting(next);
     var added = [];
+    var updated = 0;
     OFFICE_LINES.forEach(function (line) {
       var key = String(line.name || '').toLowerCase();
       var groupIndex = ensureGroupIndex(groups, OFFICE_GROUPS[line.group]);
       if (byName[key]) {
         if (byName[key].group == null || byName[key].group < 0) {
           byName[key].group = groupIndex;
+          updated += 1;
+        }
+        if (force && carry && !categoryHasSpend(next, byName[key]) && (line.actual2025 || 0) > 0) {
+          byName[key].already = fromCents(line.actual2025);
+          updated += 1;
         }
         return;
       }
@@ -1067,10 +1188,12 @@
       budget: next,
       changed: true,
       added: added.length,
+      updated: updated,
       droppedZero: droppedZero,
       lineCount: next.c.length
     };
   }
+
 
   function pad2(n) {
     return (n < 10 ? '0' : '') + n;
@@ -1181,7 +1304,7 @@
       periodStart: (budget && budget.p) || currentBienniumStart(),
       periodEnd: nextBienniumStart(budget && budget.p),
       bienniumBudget: moneyRound(budget && budget.t),
-      alreadySpent: moneyRound(budget && budget.s),
+      alreadySpent: effectiveStartingOf(budget),
       totalSpent: moneyRound(spent),
       left: moneyRound(left),
       percentUsed: budget && budget.t ? Math.round((spent / budget.t) * 100) : 0,
@@ -1272,6 +1395,8 @@
     save: save,
     remove: remove,
     startingSpentOf: startingSpentOf,
+    alreadyTotalOf: alreadyTotalOf,
+    effectiveStartingOf: effectiveStartingOf,
     loggedSpentOf: loggedSpentOf,
     spentOf: spentOf,
     leftOf: leftOf,
@@ -1301,6 +1426,10 @@
     OFFICE_PLANNED_2027: OFFICE_PLANNED_2027,
     OFFICE_ACTUAL_2025: OFFICE_ACTUAL_2025,
     ensureOfficeCategories: ensureOfficeCategories,
+    relinkExpenses: relinkExpenses,
+    normalizeCatName: normalizeCatName,
+    findPlannedByName: findPlannedByName,
+    resolvePlannedCategory: resolvePlannedCategory,
     groupClassFor: groupClassFor,
     chicagoYearMonth: chicagoYearMonth,
     previousYearMonth: previousYearMonth,
