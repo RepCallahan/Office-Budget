@@ -13,7 +13,7 @@ TrelloPowerUp.initialize({
       condition: 'edit',
       callback: function (t2) {
         return t2.modal({
-          url: './budget.html',
+          url: './budget.html?v=' + BudgetSync.ASSET_VERSION,
           fullscreen: true,
           title: 'Office Budget'
         });

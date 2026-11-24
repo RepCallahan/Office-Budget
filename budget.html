@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Office Budget</title>
-    <link rel="stylesheet" href="./css/app.css">
-    <link rel="stylesheet" href="./css/report.css">
+    <link rel="stylesheet" href="./css/app.css?v=20261124d">
+    <link rel="stylesheet" href="./css/report.css?v=20261124d">
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
   </head>
   <body>
@@ -34,7 +34,7 @@
       <div id="view-budget" class="view" hidden>
         <aside class="sidebar" aria-label="Budget sections">
           <div class="sidebar-brand">
-            <img class="sidebar-logo" src="./img/wi-seal.png" width="192" height="200" alt="Wisconsin state seal">
+            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261124d" width="192" height="200" alt="Wisconsin state seal">
             <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Budget</span>
           </div>
           <nav class="sidebar-nav">
@@ -196,6 +196,12 @@
                       <label for="plan-amount">Planned amount</label>
                       <input id="plan-amount" type="text" inputmode="decimal" required placeholder="0.00">
                     </div>
+                    <div class="field">
+                      <label for="plan-group">Group (optional)</label>
+                      <select id="plan-group">
+                        <option value="">No group</option>
+                      </select>
+                    </div>
                     <div id="plan-error" class="error" role="alert"></div>
                     <div class="form-actions">
                       <button type="submit" id="plan-save" class="primary">Save category</button>
@@ -251,6 +257,7 @@
           </section>
 
           <section id="section-settings" class="app-section" data-section-panel="settings" hidden>
+            <div class="stack">
             <section class="panel settings-card">
               <h2>Budget settings</h2>
               <form id="settings-form">
@@ -278,6 +285,21 @@
                 <button type="submit" class="primary">Save settings</button>
               </form>
               <div class="more-divider"></div>
+              <h3 class="subhead">Monthly update</h3>
+              <p class="hint">Once a month, send a snapshot of this budget to a Google Sheet through an Apps Script web app. Paste the web app URL (it should look like https://script.google.com/macros/s/…/exec). The first time you open Office Budget in a new month, a snapshot of the previous month is sent automatically.</p>
+              <form id="webhook-form">
+                <div class="field">
+                  <label for="webhook-url">Webhook URL</label>
+                  <input id="webhook-url" class="webhook-url" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="webhook-save">Save URL</button>
+                  <button type="button" class="ghost-btn" id="webhook-send">Send update now</button>
+                </div>
+              </form>
+              <p class="hint" id="webhook-status"></p>
+              <p class="error" id="webhook-error" role="alert"></p>
+              <div class="more-divider"></div>
               <h3 class="subhead">Archive</h3>
               <p class="hint">Fold logged expenses into Already spent and clear the list. Totals stay the same. Use this if Trello’s storage limit is getting full.</p>
               <button type="button" id="rollup-btn" class="ghost-btn">Archive / roll up</button>
@@ -285,12 +307,13 @@
               <button type="button" id="remove-btn" class="ghost-btn danger">Remove budget from this board</button>
               <p id="storage-line" class="storage"></p>
             </section>
+            </div>
           </section>
         </div>
 
       </div>
     </div>
-    <script src="./js/budget.js"></script>
-    <script src="./js/app.js"></script>
+    <script src="./js/budget.js?v=20261124d"></script>
+    <script src="./js/app.js?v=20261124d"></script>
   </body>
 </html>

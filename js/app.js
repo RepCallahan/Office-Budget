@@ -28,36 +28,7 @@ function showSection(name) {
   var allowed = { overview: true, budget: true, expenses: true, categories: true, reports: true, settings: true };
   if (!allowed[name]) name = 'overview';
   currentSection = name;
-  document.getElementById('plan-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('plan-error');
-  BudgetSync.showError(err, '');
-  var name = (document.getElementById('plan-name').value || '').trim();
-  var planned = BudgetSync.parseMoney(document.getElementById('plan-amount').value);
-  if (!name) return BudgetSync.showError(err, 'Please enter a category name.');
-  if (!isFinite(planned) || planned < 0) return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-  BudgetSync.load(t).then(function (budget) {
-    if (!budget) throw new Error('NO_BUDGET');
-    return BudgetSync.save(t, BudgetSync.upsertPlannedCategory(budget, {
-      id: editingPlanId || '',
-      name: name,
-      planned: planned
-    }));
-  }).then(function () {
-    resetPlanForm();
-    return refresh();
-  }).catch(function (e) {
-    if (e && e.code === 'DUP') return BudgetSync.showError(err, 'A category with that name already exists.');
-    if (e && e.code === 'NAME') return BudgetSync.showError(err, 'Please enter a category name.');
-    if (e && e.code === 'AMOUNT') return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
-    BudgetSync.showError(err, 'Could not save that category. Please try again.');
-  });
-});
-
-document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
-
-document.querySelectorAll('.nav-btn[data-section]').forEach(function (btn) {
+  document.querySelectorAll('.nav-btn[data-section]').forEach(function (btn) {
     var on = btn.getAttribute('data-section') === name;
     btn.classList.toggle('is-active', on);
     if (on) btn.setAttribute('aria-current', 'page');
@@ -251,9 +222,12 @@ function renderSummary(budget) {
   if (leftMetric) leftMetric.className = 'metric' + (over ? ' is-over' : '');
   if (remainMetric) remainMetric.className = 'metric' + (over ? ' is-over' : '');
   var bar = document.getElementById('hero-bar');
-  bar.className = 'used-bar' + (over ? ' is-over' : '');
+  var nearLimit = over || usedPct >= 90;
+  bar.className = 'used-bar' + (nearLimit ? (over ? ' is-over' : ' is-warn') : '');
   bar.style.width = Math.max(0, Math.min(100, over ? 100 : usedPct)) + '%';
-  text(document.getElementById('hero-used'), (over ? usedPct : Math.max(0, usedPct)) + '% used');
+  var usedLabel = document.getElementById('hero-used');
+  usedLabel.className = 'used-label' + (nearLimit ? (over ? ' is-over' : ' is-warn') : '');
+  text(usedLabel, (over ? usedPct : Math.max(0, usedPct)) + '% used');
   var starting = BudgetSync.startingSpentOf(budget);
   var logged = BudgetSync.loggedSpentOf(budget);
   var sub = document.getElementById('expense-sub');
@@ -314,11 +288,25 @@ function renderCategories(budget) {
   host.appendChild(go);
 }
 
+function fillGroupSelect(budget, selected) {
+  var sel = document.getElementById('plan-group');
+  if (!sel) return;
+  var groups = (budget && budget.g && budget.g.length) ? budget.g.slice() : [];
+  sel.textContent = '';
+  sel.appendChild(el('option', { value: '', text: 'No group' }));
+  groups.forEach(function (name, i) {
+    var opt = el('option', { value: String(i), text: name });
+    if (selected != null && String(selected) === String(i)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
 function resetPlanForm() {
   editingPlanId = null;
   text(document.getElementById('plan-form-heading'), 'Add category');
   var form = document.getElementById('plan-form');
   if (form) form.reset();
+  fillGroupSelect(currentBudget, '');
   document.getElementById('plan-cancel').hidden = true;
   document.getElementById('plan-save').textContent = 'Save category';
   BudgetSync.showError(document.getElementById('plan-error'), '');
@@ -329,10 +317,54 @@ function startEditPlan(row) {
   text(document.getElementById('plan-form-heading'), 'Edit category');
   document.getElementById('plan-name').value = row.name;
   document.getElementById('plan-amount').value = row.planned;
+  fillGroupSelect(currentBudget, row.group);
   document.getElementById('plan-cancel').hidden = false;
   document.getElementById('plan-save').textContent = 'Save changes';
   BudgetSync.showError(document.getElementById('plan-error'), '');
   document.getElementById('plan-form').scrollIntoView({ block: 'nearest' });
+}
+
+function planUsedLabel(row) {
+  if (row.status === 'none') {
+    return row.spent ? 'No planned amount set' : 'No plan set';
+  }
+  return row.usedPct + '% used';
+}
+
+function appendPlanItem(host, row) {
+  var actions = el('div', { className: 'actions' });
+  if (canWrite) {
+    var editBtn = el('button', { className: 'row-btn', type: 'button', 'aria-label': 'Edit' });
+    editBtn.appendChild(svgIcon('edit', 14));
+    editBtn.appendChild(document.createTextNode('Edit'));
+    editBtn.addEventListener('click', function () { startEditPlan(row); });
+    var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
+    delBtn.appendChild(svgIcon('trash', 14));
+    delBtn.appendChild(document.createTextNode('Delete'));
+    delBtn.addEventListener('click', function () { deletePlan(row); });
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+  }
+  var width = row.status === 'none' ? 0 : Math.max(0, Math.min(100, row.usedPct));
+  if (row.status === 'over') width = 100;
+  var bar = el('div', { className: 'plan-bar is-' + row.status });
+  bar.style.width = width + '%';
+  var leftClass = row.status === 'none' ? '' : (row.left < 0 ? 'is-over' : (row.status === 'ok' ? 'is-ok' : ''));
+  var leftText = row.status === 'none' ? '—' : BudgetSync.formatMoney(row.left);
+  var children = [
+    el('div', { className: 'plan-item-head' }, [
+      el('div', { className: 'plan-item-name', text: row.name }),
+      actions
+    ]),
+    el('div', { className: 'plan-item-stats' }, [
+      el('span', null, ['Planned ', el('strong', { text: BudgetSync.formatMoney(row.planned) })]),
+      el('span', null, ['Spent ', el('strong', { text: BudgetSync.formatMoney(row.spent) })]),
+      el('span', null, ['Left ', el('strong', { className: leftClass, text: leftText })])
+    ])
+  ];
+  children.push(el('div', { className: 'plan-track' }, [bar]));
+  children.push(el('div', { className: 'plan-used is-' + row.status, text: planUsedLabel(row) }));
+  host.appendChild(el('div', { className: 'plan-item' }, children));
 }
 
 function renderPlan(budget) {
@@ -350,49 +382,42 @@ function renderPlan(budget) {
     warn.hidden = true;
     text(warn, '');
   }
-  var starting = BudgetSync.startingSpentOf(budget);
-  var note = 'Unallocated is the biennium budget minus these planned amounts.';
-  if (starting) note += ' The ' + BudgetSync.formatMoney(starting) + ' already spent from the state report is a total only and is not split across categories.';
-  text(document.getElementById('plan-note'), note);
+  text(document.getElementById('plan-note'), 'Unallocated is the biennium budget minus your planned amounts.');
 
   var list = document.getElementById('plan-list');
   list.textContent = '';
   if (!track.categories.length) {
-    list.appendChild(el('div', { className: 'empty-table', text: 'No planned categories yet. Add one on the right — for example, Facebook ads — and set an amount for the biennium.' }));
+    list.appendChild(el('div', { className: 'empty-table', text: 'No categories yet. Add one on the right.' }));
   } else {
-    track.categories.forEach(function (row) {
-      var actions = el('div', { className: 'actions' });
-      if (canWrite) {
-        var editBtn = el('button', { className: 'row-btn', type: 'button', 'aria-label': 'Edit' });
-        editBtn.appendChild(svgIcon('edit', 14));
-        editBtn.appendChild(document.createTextNode('Edit'));
-        editBtn.addEventListener('click', function () { startEditPlan(row); });
-        var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
-        delBtn.appendChild(svgIcon('trash', 14));
-        delBtn.appendChild(document.createTextNode('Delete'));
-        delBtn.addEventListener('click', function () { deletePlan(row); });
-        actions.appendChild(editBtn);
-        actions.appendChild(delBtn);
+    var i = 0;
+    while (i < track.categories.length) {
+      var row = track.categories[i];
+      if (row.group >= 0 && row.groupName) {
+        var groupIndex = row.group;
+        var groupName = row.groupName;
+        var groupBox = el('div', { className: 'plan-group' });
+        var plannedSum = 0;
+        var spentSum = 0;
+        var items = [];
+        while (i < track.categories.length && track.categories[i].group === groupIndex && track.categories[i].groupName === groupName) {
+          plannedSum += track.categories[i].planned;
+          spentSum += track.categories[i].spent;
+          items.push(track.categories[i]);
+          i += 1;
+        }
+        var sub = BudgetSync.formatMoney(spentSum) + ' spent';
+        if (plannedSum) sub = BudgetSync.formatMoney(spentSum) + ' of ' + BudgetSync.formatMoney(plannedSum);
+        groupBox.appendChild(el('div', { className: 'plan-group-head' }, [
+          el('span', { text: groupName }),
+          el('span', { className: 'subtotal', text: sub })
+        ]));
+        items.forEach(function (item) { appendPlanItem(groupBox, item); });
+        list.appendChild(groupBox);
+      } else {
+        appendPlanItem(list, row);
+        i += 1;
       }
-      var width = Math.max(0, Math.min(100, row.usedPct));
-      if (row.status === 'over') width = 100;
-      var bar = el('div', { className: 'plan-bar is-' + row.status });
-      bar.style.width = width + '%';
-      var leftClass = row.left < 0 ? 'is-over' : (row.status === 'ok' ? 'is-ok' : '');
-      list.appendChild(el('div', { className: 'plan-item' }, [
-        el('div', { className: 'plan-item-head' }, [
-          el('div', { className: 'plan-item-name', text: row.name }),
-          actions
-        ]),
-        el('div', { className: 'plan-item-stats' }, [
-          el('span', null, ['Planned ', el('strong', { text: BudgetSync.formatMoney(row.planned) })]),
-          el('span', null, ['Spent ', el('strong', { text: BudgetSync.formatMoney(row.spent) })]),
-          el('span', null, ['Left ', el('strong', { className: leftClass, text: BudgetSync.formatMoney(row.left) })])
-        ]),
-        el('div', { className: 'plan-track' }, [bar]),
-        el('div', { className: 'plan-used is-' + row.status, text: row.usedPct + '% used' })
-      ]));
-    });
+    }
   }
 
   var unplanned = document.getElementById('plan-unplanned');
@@ -400,10 +425,16 @@ function renderPlan(budget) {
   if (!track.unplannedSpent) {
     unplanned.appendChild(el('p', { className: 'hint', text: 'No unplanned expenses this period. New expenses can use Other / Unplanned, and older state-report categories stay listed here.' }));
   } else {
-    unplanned.appendChild(el('p', { className: 'hint', text: BudgetSync.formatMoney(track.unplannedSpent) + ' logged without a planned category.' }));
+    var unplannedHint = BudgetSync.formatMoney(track.unplannedSpent) + ' without a planned amount.';
+    if (track.unitemized) {
+      unplannedHint = BudgetSync.formatMoney(track.unitemized) + ' is Other / unitemized — the part of already-spent not assigned to a category.';
+      if (track.unplannedLogged) unplannedHint += ' Another ' + BudgetSync.formatMoney(track.unplannedLogged) + ' was logged without a planned category.';
+    }
+    unplanned.appendChild(el('p', { className: 'hint', text: unplannedHint }));
     renderSpendList(unplanned, track.unplannedGroups, '');
   }
 
+  fillGroupSelect(budget, editingPlanId ? document.getElementById('plan-group').value : '');
   var saveBtn = document.getElementById('plan-save');
   if (saveBtn) saveBtn.disabled = !canWrite;
 }
@@ -499,8 +530,27 @@ function renderSettings(budget) {
   var info = BudgetSync.storageInfo(budget);
   var storage = document.getElementById('storage-line');
   storage.className = 'storage' + (info.full ? ' is-full' : info.warn ? ' is-warn' : '');
-  text(storage, 'Storage used: ' + info.percent + '% of Trello’s board limit.');
+  text(storage, 'Storage used: ' + info.percent + '% of Trello’s board limit (' + info.used + ' of ' + info.limit + ' characters).');
   if (info.full) document.getElementById('exp-save').disabled = true;
+  var urlField = document.getElementById('webhook-url');
+  if (urlField && document.activeElement !== urlField) urlField.value = budget.k || '';
+  var status = document.getElementById('webhook-status');
+  if (status) {
+    var statusParts = [];
+    if (!budget.k) statusParts.push('No webhook saved yet.');
+    else statusParts.push('Webhook saved.');
+    if (budget.n) {
+      var when = BudgetSync.formatDateTimeChicago(budget.n);
+      statusParts.push(budget.o ? ('Last sent ' + when + '.') : ('Last try failed ' + when + '. It will retry the next time Office Budget is opened.'));
+    }
+    if (budget.m) statusParts.push('Last automatic month: ' + budget.m + '.');
+    if (budget.k) statusParts.push('Apps Script responses cannot be read from Trello (the request is sent without CORS), so “sent” means the request left this browser without a network error.');
+    text(status, statusParts.join(' '));
+  }
+  var hookSave = document.getElementById('webhook-save');
+  var hookSend = document.getElementById('webhook-send');
+  if (hookSave) hookSave.disabled = !canWrite;
+  if (hookSend) hookSend.disabled = !canWrite || !budget.k;
 }
 
 function renderBudget(budget) {
@@ -522,17 +572,64 @@ function renderBudget(budget) {
   }
 }
 
+var autoSendTried = false;
+
+function maybeAutoSend(budget) {
+  if (autoSendTried || !budget || !budget.k) return Promise.resolve();
+  autoSendTried = true;
+  var prev = BudgetSync.previousYearMonth(BudgetSync.chicagoYearMonth());
+  if (budget.m === prev) return Promise.resolve();
+  var payload = BudgetSync.buildMonthlyPayload(budget, prev, currentMemberName);
+  return BudgetSync.postWebhook(budget.k, payload).then(function () {
+    return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: true, month: prev })).then(function () {
+      return BudgetSync.load(t).then(function (fresh) {
+        if (fresh) {
+          currentBudget = fresh;
+          renderSettings(fresh);
+        }
+      });
+    });
+  }).catch(function () {
+    return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: false })).then(function () {
+      return BudgetSync.load(t).then(function (fresh) {
+        if (fresh) {
+          currentBudget = fresh;
+          renderSettings(fresh);
+        }
+      });
+    }).catch(function () { return null; });
+  });
+}
+
+function showLoadedBudget(budget) {
+  currentBudget = budget;
+  showView('budget');
+  renderBudget(budget);
+  showSection(currentSection);
+  return maybeAutoSend(budget);
+}
+
+function maybeSeedCategories(budget) {
+  if (!budget || !canWrite) return Promise.resolve(budget);
+  var seeded = BudgetSync.ensureOfficeCategories(budget);
+  if (!seeded.changed) return Promise.resolve(budget);
+  return BudgetSync.save(t, seeded.budget).then(function () {
+    return BudgetSync.load(t);
+  }).catch(function () {
+    return budget;
+  });
+}
+
 function refresh() {
   return BudgetSync.load(t).then(function (budget) {
     currentBudget = budget;
     if (!budget) {
       showView('setup');
       document.getElementById('setup-total').value = BudgetSync.DEFAULT_TOTAL;
-    } else {
-      showView('budget');
-      renderBudget(budget);
-      showSection(currentSection);
+      return;
     }
+    return maybeSeedCategories(budget).then(showLoadedBudget);
+  }).then(function () {
     if (typeof t.sizeTo === 'function') {
       return t.sizeTo(document.body).catch(function () { return null; });
     }
@@ -698,18 +795,18 @@ function renderReport(budget) {
     var planBody = el('tbody');
     track.categories.forEach(function (row) {
       planBody.appendChild(el('tr', null, [
-        el('td', { text: row.name }),
+        el('td', { text: row.groupName ? (row.groupName + ' — ' + row.name) : row.name }),
         el('td', { className: 'num', text: moneyReport(row.planned) }),
         el('td', { className: 'num', text: moneyReport(row.spent) }),
-        el('td', { className: 'num' + (row.left < 0 ? ' is-over' : ''), text: moneyReport(row.left) })
+        el('td', { className: 'num' + (row.status !== 'none' && row.left < 0 ? ' is-over' : ''), text: row.status === 'none' ? '—' : moneyReport(row.left) })
       ]));
     });
     if (track.unplannedSpent) {
       planBody.appendChild(el('tr', null, [
-        el('td', { text: 'Unplanned' }),
+        el('td', { text: 'Unplanned / unitemized' }),
         el('td', { className: 'num', text: moneyReport(0) }),
         el('td', { className: 'num', text: moneyReport(track.unplannedSpent) }),
-        el('td', { className: 'num', text: moneyReport(0 - track.unplannedSpent) })
+        el('td', { className: 'num', text: '—' })
       ]));
     }
     reportEl.appendChild(el('table', { className: 'plan-table' }, [
@@ -718,11 +815,12 @@ function renderReport(budget) {
       el('tfoot', null, [el('tr', null, [
         el('td', { text: 'Total' }),
         el('td', { className: 'num', text: moneyReport(track.totalPlanned) }),
-        el('td', { className: 'num', text: moneyReport(logged) }),
+        el('td', { className: 'num', text: moneyReport(spent) }),
         el('td', { className: 'num', text: '' })
       ])])
     ]));
-    var planNote = 'Planned amounts are the office plan for this biennium. Spent amounts are expenses logged in Budget Sync this period. They do not include the already-spent amount carried in from the state report (' + moneyReport(starting) + ').';
+    var planNote = 'Spent amounts include any amounts carried in for a category plus expenses logged this period. The already-spent total from the state report (' + moneyReport(starting) + ') is not added a second time.';
+    if (track.unitemized) planNote += ' The ' + moneyReport(track.unitemized) + ' gap between that already-spent total and the amounts carried in by category is listed as Other / unitemized.';
     if (track.overPlanned) planNote += ' Planned categories exceed the biennium budget by ' + moneyReport(Math.abs(track.unallocated)) + '.';
     reportEl.appendChild(el('p', { className: 'note', text: planNote }));
   } else {
@@ -779,8 +877,8 @@ document.getElementById('confirm-reset-btn').addEventListener('click', function 
   if (!currentBudget) return;
   var start = BudgetSync.periodStartForReset(currentBudget);
   var ok = window.confirm(
-    'I\'ve saved the report, reset for next session?\n\nThis will clear all logged expenses and the already-spent amount, set the biennium budget back to $25,000, and start the next period on ' +
-    BudgetSync.formatDate(start) + '. Planned category names and amounts will be kept. This cannot be undone.'
+    'I\'ve saved the report, reset for next session?\n\nThis will clear all expenses, per-category spent and carried-in amounts, the already-spent total, and unitemized amounts. The biennium budget goes back to $25,000, and the next period starts on ' +
+    BudgetSync.formatDate(start) + '. Every category the office has made is kept — names, groups, and planned amounts. A reset never deletes categories. This cannot be undone.'
   );
   if (!ok) return;
   BudgetSync.save(t, BudgetSync.startNewPeriod(currentBudget)).then(function () {
@@ -817,6 +915,80 @@ if (viewAll) {
     showSection('expenses');
   });
 }
+
+
+document.getElementById('plan-form').addEventListener('submit', function (event) {
+  event.preventDefault();
+  var err = document.getElementById('plan-error');
+  BudgetSync.showError(err, '');
+  var name = (document.getElementById('plan-name').value || '').trim();
+  var planned = BudgetSync.parseMoney(document.getElementById('plan-amount').value);
+  var groupVal = document.getElementById('plan-group').value;
+  if (!name) return BudgetSync.showError(err, 'Please enter a category name.');
+  if (!isFinite(planned) || planned < 0) return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
+  BudgetSync.load(t).then(function (budget) {
+    if (!budget) throw new Error('NO_BUDGET');
+    return BudgetSync.save(t, BudgetSync.upsertPlannedCategory(budget, {
+      id: editingPlanId || '',
+      name: name,
+      planned: planned,
+      group: groupVal === '' ? -1 : Number(groupVal)
+    }));
+  }).then(function () {
+    resetPlanForm();
+    return refresh();
+  }).catch(function (e) {
+    if (e && e.code === 'DUP') return BudgetSync.showError(err, 'A category with that name already exists.');
+    if (e && e.code === 'NAME') return BudgetSync.showError(err, 'Please enter a category name.');
+    if (e && e.code === 'AMOUNT') return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
+    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
+    BudgetSync.showError(err, 'Could not save that category. Please try again.');
+  });
+});
+
+document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
+
+document.getElementById('webhook-form').addEventListener('submit', function (event) {
+  event.preventDefault();
+  var err = document.getElementById('webhook-error');
+  BudgetSync.showError(err, '');
+  var url = document.getElementById('webhook-url').value;
+  BudgetSync.load(t).then(function (budget) {
+    if (!budget) throw new Error('NO_BUDGET');
+    return BudgetSync.save(t, BudgetSync.setWebhookUrl(budget, url));
+  }).then(refresh).catch(function (e) {
+    if (e && e.code === 'HTTPS') return BudgetSync.showError(err, 'Use an https URL (or localhost for a test).');
+    if (e && e.code === 'URL') return BudgetSync.showError(err, 'Enter a valid webhook URL.');
+    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
+    BudgetSync.showError(err, 'Could not save the webhook URL. Please try again.');
+  });
+});
+
+document.getElementById('webhook-send').addEventListener('click', function () {
+  var err = document.getElementById('webhook-error');
+  BudgetSync.showError(err, '');
+  if (!currentBudget || !currentBudget.k) {
+    return BudgetSync.showError(err, 'Save a webhook URL first.');
+  }
+  var month = BudgetSync.chicagoYearMonth();
+  var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName);
+  var url = currentBudget.k;
+  BudgetSync.postWebhook(url, payload).then(function () {
+    return BudgetSync.load(t).then(function (budget) {
+      if (!budget) return;
+      return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: true })).then(refresh);
+    });
+  }).catch(function () {
+    return BudgetSync.load(t).then(function (budget) {
+      if (!budget) return;
+      return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: false })).then(function () {
+        BudgetSync.showError(err, 'The update could not be sent. Check the URL and try again.');
+        return refresh();
+      });
+    });
+  });
+});
+
 
 t.render(function () {
   canWrite = typeof t.memberCanWriteToModel === 'function' ? t.memberCanWriteToModel('board') : true;

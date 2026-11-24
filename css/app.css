@@ -259,7 +259,11 @@ html, body {
   transition: width var(--ease);
 }
 
+.used-bar.is-warn,
 .used-bar.is-over { background: var(--red); }
+
+.used-label.is-warn,
+.used-label.is-over { color: var(--red); }
 
 .used-label {
   flex: 0 0 auto;
@@ -296,6 +300,13 @@ html, body {
 .expenses-col,
 .form-slot,
 .panel { min-width: 0; }
+
+.form-slot,
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 
 .expenses-col,
 .panel,
@@ -478,6 +489,7 @@ table.expenses td.actions {
 input[type="text"],
 input[type="number"],
 input[type="date"],
+input[type="url"],
 select {
   width: 100%;
   height: 38px;
@@ -526,7 +538,7 @@ input:focus, select:focus {
   margin: 20px 0 16px;
 }
 
-.settings-card { max-width: 28rem; }
+.settings-card { max-width: 40rem; }
 
 button, .btn {
   appearance: none;
@@ -795,7 +807,7 @@ button.danger:hover,
   transition: width var(--ease), background var(--ease);
 }
 
-.plan-bar.is-warn { background: var(--amber); }
+.plan-bar.is-warn,
 .plan-bar.is-over { background: var(--red); }
 
 .plan-used {
@@ -806,8 +818,10 @@ button.danger:hover,
   font-variant-numeric: tabular-nums;
 }
 
-.plan-used.is-warn { color: var(--warn); }
+.plan-used.is-warn,
 .plan-used.is-over { color: var(--red); }
+.plan-used.is-none { color: var(--muted); font-weight: 500; }
+
 
 #plan-unallocated.pill-green { background: var(--green-soft); color: var(--green); }
 #plan-unallocated.is-over,
@@ -834,4 +848,57 @@ button.danger:hover,
 
 @media (max-width: 900px) {
   .plan-metrics { grid-template-columns: 1fr; }
+}
+
+.plan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.plan-group {
+  margin: 0 0 4px;
+  padding: 0;
+  background: transparent;
+}
+
+.plan-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 4px 8px;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+}
+
+.plan-group:first-child .plan-group-head { padding-top: 4px; }
+
+.plan-group-head .subtotal {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.plan-group .plan-item { border-bottom-color: rgba(17, 24, 39, 0.06); }
+.plan-item-already { font-size: 12px; color: var(--muted); margin: -2px 0 8px; }
+
+.webhook-url { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+#webhook-status { margin: 10px 0 0; }
+
+@media (max-width: 960px) {
+  #section-budget .col-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .plan-toolbar { justify-content: flex-start; }
 }

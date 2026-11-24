@@ -4,16 +4,21 @@
  * Budget data is stored in board-level shared pluginData under the short key "b".
  * Trello caps the stringified object at 4096 characters per scope/visibility pair.
  *
- * Stored shape (v3, backward compatible with v2):
- *   { v: 3, t: total, s: startingSpent, p: "YYYY-MM-DD",
+ * Stored shape (v4, backward compatible with v2 and v3):
+ *   { v: 4, t: total, s: startingSpent, p: "YYYY-MM-DD",
  *     e: [[id, date, desc, cat, amount, by]],
- *     c: [[id, name, planned]] }
+ *     c: [[id, name, plannedCents, alreadyCents?, groupIndex?]],
+ *     g: ["Spring Survey", ...],
+ *     k: webhookUrl, m: lastAutoMonth, n: lastAttemptMs, o: lastOk, f: 1 if default categories were seeded }
  * Expense "cat" values:
  *   - a number 0-22: legacy built-in state category (v2 data)
  *   - "#id": a custom planned category in `c`
  *   - "*": Other / Unplanned
  *   - any other string: legacy "Other" free text, or a deleted category's name
- * `c` is omitted when empty so existing v2 boards stay compact.
+ * `t`/`s` and expense amounts stay in dollars. Category planned/already use integer cents.
+ * Optional keys (`c`, `g`, `k`, `m`, `n`, `o`) are omitted when empty.
+ * All board+shared pluginData keys share one 4096-character cap, so everything
+ * stays in the single key "b".
  */
 (function (root) {
   var STORAGE_KEY = 'b';
@@ -48,9 +53,15 @@
   var OTHER_INDEX = CATEGORIES.indexOf('Other');
   var SUGGESTED_STARTING = 22473.29;
 
+  // Bump this when uploading a new copy to GitHub Pages so Trello and the
+  // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
+  var ASSET_VERSION = '20261124d';
+
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
+    path = path.split('?')[0];
     path = path.replace(/index\.html$/i, '');
+    path = path.replace(/budget\.html$/i, '');
     path = path.replace(/section\.html$/i, '');
     path = path.replace(/expense\.html$/i, '');
     path = path.replace(/settings\/total\.html$/i, '');
@@ -60,8 +71,15 @@
     return window.location.origin + path;
   }
 
+  function assetUrl(relativePath) {
+    return publicBaseUrl() + String(relativePath || '').replace(/^\.\//, '') + '?v=' + ASSET_VERSION;
+  }
+
   function iconUrl() {
-    return publicBaseUrl() + 'img/icon.svg';
+    return {
+      dark: assetUrl('img/icon-dark.svg'),
+      light: assetUrl('img/icon-light.svg')
+    };
   }
 
   function firstMondayOfJanuary(year) {
@@ -116,20 +134,48 @@
   var CUSTOM_PREFIX = '#';
   var MAX_CAT_NAME = 40;
 
+  function moneyRound(value) {
+    return Math.round((Number(value) || 0) * 100) / 100;
+  }
+
+  function toCents(dollars) {
+    return Math.round((Number(dollars) || 0) * 100);
+  }
+
+  function fromCents(cents) {
+    return moneyRound((Number(cents) || 0) / 100);
+  }
+
   function emptyBudget(total, starting, period) {
     var n = Number(total);
     var s = Number(starting);
     return {
-      v: 3,
+      v: 4,
       t: isFinite(n) ? n : DEFAULT_TOTAL,
       s: isFinite(s) ? s : 0,
       p: period || currentBienniumStart(),
       e: [],
-      c: []
+      c: [],
+      g: [],
+      k: '',
+      m: '',
+      n: 0,
+      o: 0,
+      f: 0
     };
   }
 
-  function parseCategories(raw) {
+  function parseGroups(raw) {
+    if (!Array.isArray(raw)) return [];
+    var list = [];
+    raw.forEach(function (name) {
+      name = String(name || '').trim().slice(0, 48);
+      if (name) list.push(name);
+    });
+    return list;
+  }
+
+  function parseCategories(raw, fromStorageCents) {
     if (!Array.isArray(raw)) return [];
     var seen = {};
     var list = [];
@@ -140,18 +186,29 @@
         cat = {
           id: String(row[0] || ''),
           name: String(row[1] || '').trim().slice(0, MAX_CAT_NAME),
-          planned: Number(row[2]) || 0
+          planned: Number(row[2]) || 0,
+          already: Number(row[3]) || 0,
+          group: row.length > 4 && row[4] != null && row[4] !== '' ? Number(row[4]) : -1
         };
+        if (fromStorageCents) {
+          cat.planned = fromCents(cat.planned);
+          cat.already = fromCents(cat.already);
+        }
       } else {
         cat = {
           id: String(row.id || row.i || ''),
           name: String(row.name || row.n || '').trim().slice(0, MAX_CAT_NAME),
-          planned: Number(row.planned != null ? row.planned : row.a) || 0
+          planned: Number(row.planned != null ? row.planned : row.a) || 0,
+          already: Number(row.already != null ? row.already : 0) || 0,
+          group: row.group != null && row.group !== '' ? Number(row.group) : -1
         };
       }
       if (!cat.id || !cat.name || seen[cat.id]) return;
       if (!isFinite(cat.planned) || cat.planned < 0) cat.planned = 0;
-      cat.planned = Math.round(cat.planned * 100) / 100;
+      if (!isFinite(cat.already) || cat.already < 0) cat.already = 0;
+      if (!isFinite(cat.group)) cat.group = -1;
+      cat.planned = moneyRound(cat.planned);
+      cat.already = moneyRound(cat.already);
       seen[cat.id] = true;
       list.push(cat);
     });
@@ -311,27 +368,49 @@
     return base;
   }
 
+  function copyHookFields(target, source) {
+    target.k = source && source.k ? String(source.k) : '';
+    target.m = source && source.m ? String(source.m) : '';
+    target.n = source && source.n ? Number(source.n) || 0 : 0;
+    target.o = source && typeof source.o !== 'undefined' ? Number(source.o) || 0 : 0;
+    target.f = source && source.f ? 1 : 0;
+    return target;
+  }
+
   function normalize(raw) {
     if (raw == null || raw === '') return null;
     if (typeof raw === 'number') {
       return emptyBudget(raw);
     }
     if (typeof raw !== 'object') return null;
+    var fromCentsStored = Number(raw.v) >= 4;
     var budget = {
-      v: 3,
+      v: 4,
       t: Number(raw.t) || 0,
       s: Number(raw.s) || 0,
       p: raw.p ? String(raw.p) : currentBienniumStart(),
       e: [],
-      c: parseCategories(raw.c)
+      c: parseCategories(raw.c, fromCentsStored),
+      g: parseGroups(raw.g)
     };
+    copyHookFields(budget, raw);
     budget.e = Array.isArray(raw.e) ? raw.e.map(function (row) { return parseExpense(row, budget); }).filter(Boolean) : [];
     return budget;
   }
 
+  function serializeCategory(cat) {
+    var plannedCents = toCents(cat.planned);
+    var alreadyCents = toCents(cat.already);
+    var group = cat.group != null && isFinite(cat.group) ? Number(cat.group) : -1;
+    if (alreadyCents === 0 && group < 0) {
+      return [String(cat.id), String(cat.name).slice(0, MAX_CAT_NAME), plannedCents];
+    }
+    return [String(cat.id), String(cat.name).slice(0, MAX_CAT_NAME), plannedCents, alreadyCents, group < 0 ? -1 : group];
+  }
+
   function serialize(budget) {
     var packed = {
-      v: 3,
+      v: 4,
       t: Number(budget && budget.t) || 0,
       s: Number(budget && budget.s) || 0,
       p: String((budget && budget.p) || ''),
@@ -347,11 +426,14 @@
       })
     };
     var cats = parseCategories(budget && budget.c);
-    if (cats.length) {
-      packed.c = cats.map(function (cat) {
-        return [String(cat.id), String(cat.name).slice(0, MAX_CAT_NAME), Number(cat.planned) || 0];
-      });
-    }
+    if (cats.length) packed.c = cats.map(serializeCategory);
+    var groups = parseGroups(budget && budget.g);
+    if (groups.length) packed.g = groups;
+    if (budget && budget.k) packed.k = String(budget.k);
+    if (budget && budget.m) packed.m = String(budget.m);
+    if (budget && budget.n) packed.n = Number(budget.n) || 0;
+    if (budget && budget.n) packed.o = Number(budget.o) || 0;
+    if (budget && budget.f) packed.f = 1;
     return packed;
   }
 
@@ -492,19 +574,27 @@
 
   function withMeta(budget, extras) {
     var next = {
-      v: 3,
+      v: 4,
       t: budget.t,
       s: startingSpentOf(budget),
       p: budget.p || currentBienniumStart(),
       e: (budget.e || []).slice(),
-      c: parseCategories(budget && budget.c)
+      c: parseCategories(budget && budget.c),
+      g: parseGroups(budget && budget.g)
     };
+    copyHookFields(next, budget);
     if (extras) {
       if (typeof extras.t !== 'undefined') next.t = extras.t;
       if (typeof extras.s !== 'undefined') next.s = extras.s;
       if (typeof extras.p !== 'undefined') next.p = extras.p;
       if (typeof extras.e !== 'undefined') next.e = extras.e;
       if (typeof extras.c !== 'undefined') next.c = parseCategories(extras.c);
+      if (typeof extras.g !== 'undefined') next.g = parseGroups(extras.g);
+      if (typeof extras.k !== 'undefined') next.k = extras.k ? String(extras.k) : '';
+      if (typeof extras.m !== 'undefined') next.m = extras.m ? String(extras.m) : '';
+      if (typeof extras.n !== 'undefined') next.n = Number(extras.n) || 0;
+      if (typeof extras.o !== 'undefined') next.o = Number(extras.o) || 0;
+      if (typeof extras.f !== 'undefined') next.f = extras.f ? 1 : 0;
     }
     return next;
   }
@@ -530,16 +620,41 @@
   }
 
   function rollUp(budget) {
-    return withMeta(budget, {
-      s: spentOf(budget),
-      e: []
+    var next = withMeta(budget);
+    var spentById = {};
+    (next.e || []).forEach(function (item) {
+      var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
+      if (isCustomPacked(packed) && findPlanned(next, customIdFromPacked(packed))) {
+        var id = customIdFromPacked(packed);
+        spentById[id] = (spentById[id] || 0) + (Number(item.amount) || 0);
+      }
     });
+    next.c = next.c.map(function (cat) {
+      return {
+        id: cat.id,
+        name: cat.name,
+        planned: cat.planned,
+        already: moneyRound((Number(cat.already) || 0) + (spentById[cat.id] || 0)),
+        group: cat.group
+      };
+    });
+    next.s = spentOf(budget);
+    next.e = [];
+    return next;
   }
 
   function startNewPeriod(budget, today) {
     var start = periodStartForReset(budget, today);
     var next = emptyBudget(DEFAULT_TOTAL, 0, start);
-    next.c = parseCategories(budget && budget.c);
+    next.c = parseCategories(budget && budget.c).map(function (cat) {
+      return { id: cat.id, name: cat.name, planned: cat.planned, already: 0, group: cat.group };
+    });
+    next.g = parseGroups(budget && budget.g);
+    next.k = budget && budget.k ? String(budget.k) : '';
+    next.m = '';
+    next.n = 0;
+    next.o = 0;
+    next.f = 1;
     return next;
   }
 
@@ -557,7 +672,7 @@
       amtErr.code = 'AMOUNT';
       throw amtErr;
     }
-    planned = Math.round(planned * 100) / 100;
+    planned = moneyRound(planned);
     var id = fields && fields.id != null && String(fields.id) !== '' ? String(fields.id) : newPlannedId(next);
     var lower = name.toLowerCase();
     for (var i = 0; i < next.c.length; i++) {
@@ -567,15 +682,28 @@
         throw dup;
       }
     }
+    var alreadyProvided = fields && typeof fields.already !== 'undefined';
+    var groupProvided = fields && typeof fields.group !== 'undefined';
+    var already = alreadyProvided ? Number(fields.already) : 0;
+    if (!isFinite(already) || already < 0) already = 0;
+    already = moneyRound(already);
+    var group = groupProvided ? Number(fields.group) : -1;
+    if (!isFinite(group)) group = -1;
     var found = false;
     for (var j = 0; j < next.c.length; j++) {
       if (String(next.c[j].id) === id) {
-        next.c[j] = { id: id, name: name, planned: planned };
+        next.c[j] = {
+          id: id,
+          name: name,
+          planned: planned,
+          already: alreadyProvided ? already : (Number(next.c[j].already) || 0),
+          group: groupProvided ? group : (next.c[j].group != null ? next.c[j].group : -1)
+        };
         found = true;
         break;
       }
     }
-    if (!found) next.c.push({ id: id, name: name, planned: planned });
+    if (!found) next.c.push({ id: id, name: name, planned: planned, already: already, group: group });
     return next;
   }
 
@@ -630,15 +758,20 @@
     });
   }
 
-  function moneyRound(value) {
-    return Math.round((Number(value) || 0) * 100) / 100;
+  var UNITEMIZED_LABEL = 'Other / unitemized';
+
+  function categoriesInSheetOrder(budget) {
+    var list = ((budget && budget.c) || []).slice();
+    var grouped = list.some(function (cat) { return cat.group != null && cat.group >= 0; });
+    if (!grouped) return sortPlanned(list);
+    return list;
   }
 
   function plannedTracking(budget) {
     var spentById = {};
     var unplannedGroups = {};
     var unplannedOrder = [];
-    var unplannedSpent = 0;
+    var unplannedLogged = 0;
     ((budget && budget.e) || []).forEach(function (item) {
       var packed = (item.catPacked != null && item.catPacked !== '') ? item.catPacked : packCategory(item);
       var amount = Number(item.amount) || 0;
@@ -646,7 +779,7 @@
         var id = customIdFromPacked(packed);
         spentById[id] = (spentById[id] || 0) + amount;
       } else {
-        unplannedSpent += amount;
+        unplannedLogged += amount;
         var label = categoryGroupLabel(packed, budget);
         if (!unplannedGroups[label]) {
           unplannedGroups[label] = 0;
@@ -655,22 +788,33 @@
         unplannedGroups[label] += amount;
       }
     });
-    var categories = sortPlanned((budget && budget.c) || []).map(function (cat) {
-      var spent = moneyRound(spentById[cat.id] || 0);
+    var alreadyTotal = 0;
+    var categories = categoriesInSheetOrder(budget).map(function (cat) {
+      var logged = moneyRound(spentById[cat.id] || 0);
+      var already = moneyRound(cat.already);
+      alreadyTotal += already;
+      var spent = moneyRound(already + logged);
       var planned = moneyRound(cat.planned);
       var left = moneyRound(planned - spent);
-      var usedPct = planned > 0 ? Math.round((spent / planned) * 100) : (spent > 0 ? 100 : 0);
+      var usedPct = planned > 0 ? Math.round((spent / planned) * 100) : 0;
       var status = 'ok';
-      if (spent > planned || (planned === 0 && spent > 0)) status = 'over';
-      else if (planned > 0 && usedPct >= 90) status = 'warn';
+      if (planned <= 0) status = 'none';
+      else if (spent > planned) status = 'over';
+      else if (usedPct >= 90) status = 'warn';
+      var groupIndex = cat.group != null && isFinite(cat.group) ? Number(cat.group) : -1;
+      var groupName = groupIndex >= 0 && budget && budget.g && budget.g[groupIndex] ? budget.g[groupIndex] : '';
       return {
         id: cat.id,
         name: cat.name,
         planned: planned,
+        already: already,
+        logged: logged,
         spent: spent,
         left: left,
         usedPct: usedPct,
-        status: status
+        status: status,
+        group: groupIndex,
+        groupName: groupName
       };
     });
     var totalPlanned = 0;
@@ -678,19 +822,27 @@
     totalPlanned = moneyRound(totalPlanned);
     var biennium = moneyRound(budget && budget.t);
     var unallocated = moneyRound(biennium - totalPlanned);
+    var unitemized = moneyRound(Math.max(0, startingSpentOf(budget) - alreadyTotal));
+    var unplannedSpent = moneyRound(unplannedLogged + unitemized);
+    var groups = unplannedOrder.map(function (label) {
+      return { label: label, amount: moneyRound(unplannedGroups[label]) };
+    });
+    if (unitemized > 0) groups.push({ label: UNITEMIZED_LABEL, amount: unitemized });
+    groups.sort(function (a, b) {
+      if (b.amount !== a.amount) return b.amount - a.amount;
+      return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+    });
     return {
       categories: categories,
       totalPlanned: totalPlanned,
       biennium: biennium,
       unallocated: unallocated,
       overPlanned: unallocated < 0,
-      unplannedSpent: moneyRound(unplannedSpent),
-      unplannedGroups: unplannedOrder.map(function (label) {
-        return { label: label, amount: moneyRound(unplannedGroups[label]) };
-      }).sort(function (a, b) {
-        if (b.amount !== a.amount) return b.amount - a.amount;
-        return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
-      })
+      unitemized: unitemized,
+      alreadyTotal: moneyRound(alreadyTotal),
+      unplannedLogged: moneyRound(unplannedLogged),
+      unplannedSpent: unplannedSpent,
+      unplannedGroups: groups
     };
   }
 
@@ -794,6 +946,292 @@
     return 'This board is getting full (' + info.percent + '% of Trello’s storage limit). After you reconcile with the state report, use Archive / roll up to free space.';
   }
 
+
+  var OFFICE_GROUPS = [
+    'Spring Survey',
+    'Spring Newsletter',
+    'Internet + Social Media',
+    'Travel / Registration',
+    'Misc',
+    'Postage',
+    'Print',
+    'Maintenance / Unallocated'
+  ];
+
+  // planned2027 and actual2025 are integer cents used only to seed starting category amounts.
+  // "SOCIAL MEDIA BOOTING" is stored as "Social Media Boosting".
+  var OFFICE_LINES = [
+    { name: 'Spring Survey - Printing', group: 0, planned2027: 75000, actual2025: 69661 },
+    { name: 'Spring Survey - Paper', group: 0, planned2027: 35000, actual2025: 26132 },
+    { name: 'Spring Survey - Addressing', group: 0, planned2027: 75000, actual2025: 64604 },
+    { name: 'Spring Survey - Postage', group: 0, planned2027: 320000, actual2025: 249485 },
+    { name: 'Spring Newsletter - Printing', group: 1, planned2027: 75000, actual2025: 65609 },
+    { name: 'Spring Newsletter - Paper', group: 1, planned2027: 85000, actual2025: 74907 },
+    { name: 'Spring Newsletter - Addressing', group: 1, planned2027: 95000, actual2025: 82609 },
+    { name: 'Spring Newsletter - Postage', group: 1, planned2027: 650000, actual2025: 539713 },
+    { name: "Calvin's Internet", group: 2, planned2027: 140000, actual2025: 0 },
+    { name: 'Social Media Boosting', group: 2, planned2027: 200000, actual2025: 171582 },
+    { name: 'Registration Fee - Staff', group: 3, planned2027: 20000, actual2025: 0 },
+    { name: 'In-District Travel - Staff', group: 3, planned2027: 100000, actual2025: 0 },
+    { name: 'Registration Fee', group: 3, planned2027: 40000, actual2025: 0 },
+    { name: 'Out of State Travel', group: 3, planned2027: 100000, actual2025: 122000 },
+    { name: 'Blue Book Misc', group: 4, planned2027: 10000, actual2025: 5000 },
+    { name: 'Flags', group: 4, planned2027: 35000, actual2025: 0 },
+    { name: 'Subscriptions', group: 4, planned2027: 175000, actual2025: 0 },
+    { name: 'GIS Requests', group: 4, planned2027: 7500, actual2025: 0 },
+    { name: 'Citations', group: 4, planned2027: 10000, actual2025: 7690 },
+    { name: 'School Group Postcards', group: 4, planned2027: 2500, actual2025: 0 },
+    { name: 'Material and Office Supplies', group: 4, planned2027: 20000, actual2025: 0 },
+    { name: 'Color Copies', group: 4, planned2027: 1000, actual2025: 0 },
+    { name: 'Postage - Bulk', group: 5, planned2027: 0, actual2025: 0 },
+    { name: 'Postage - Metered', group: 5, planned2027: 0, actual2025: 0 },
+    { name: 'Postage', group: 5, planned2027: 0, actual2025: 0 },
+    { name: 'Print - Business Cards', group: 6, planned2027: 15000, actual2025: 0 },
+    { name: 'Print - Notecards', group: 6, planned2027: 0, actual2025: 0 },
+    { name: 'Print - Notecard Envelopes', group: 6, planned2027: 0, actual2025: 0 },
+    { name: 'Print - Sticker Business Cards', group: 6, planned2027: 10000, actual2025: 0 },
+    { name: 'Print - Letterhead', group: 6, planned2027: 50000, actual2025: 0 },
+    { name: 'Print - Letterhead Envelopes', group: 6, planned2027: 40000, actual2025: 0 },
+    { name: 'Print - Saw You in the News', group: 6, planned2027: 0, actual2025: 0 },
+    { name: 'Maintenance and Repair', group: 7, planned2027: 10000, actual2025: 0 },
+    { name: 'Unallocated / Contingency', group: 7, planned2027: 0, actual2025: 0 }
+  ];
+
+  var OFFICE_PLANNED_2027 = 23960;
+  var OFFICE_ACTUAL_2025 = 14789.92;
+
+  function groupClassFor(name) {
+    return '';
+  }
+
+  function ensureGroupIndex(groups, name) {
+    var lower = String(name || '').toLowerCase();
+    var i;
+    for (i = 0; i < groups.length; i++) {
+      if (String(groups[i]).toLowerCase() === lower) return i;
+    }
+    groups.push(name);
+    return groups.length - 1;
+  }
+
+  function shouldCarryInStarting(budget) {
+    var period = String((budget && budget.p) || currentBienniumStart());
+    return period < '2027-01-04';
+  }
+
+  function ensureOfficeCategories(budget) {
+    var next = withMeta(budget);
+    if (next.f) {
+      return { budget: next, changed: false, added: 0, droppedZero: false };
+    }
+    var groups = parseGroups(next.g);
+    OFFICE_GROUPS.forEach(function (name) { ensureGroupIndex(groups, name); });
+    var byName = {};
+    next.c.forEach(function (cat) {
+      byName[String(cat.name || '').toLowerCase()] = cat;
+    });
+    var carry = shouldCarryInStarting(next);
+    var added = [];
+    OFFICE_LINES.forEach(function (line) {
+      var key = String(line.name || '').toLowerCase();
+      var groupIndex = ensureGroupIndex(groups, OFFICE_GROUPS[line.group]);
+      if (byName[key]) {
+        if (byName[key].group == null || byName[key].group < 0) {
+          byName[key].group = groupIndex;
+        }
+        return;
+      }
+      var cat = {
+        id: newPlannedId({ c: next.c.concat(added) }),
+        name: line.name,
+        planned: 0,
+        already: carry ? fromCents(line.actual2025) : 0,
+        group: groupIndex
+      };
+      added.push(cat);
+    });
+    next.g = groups;
+    next.c = next.c.concat(added);
+    next.f = 1;
+    var droppedZero = false;
+    if (!wouldFit(next)) {
+      var addedIds = {};
+      added.forEach(function (cat) { addedIds[cat.id] = true; });
+      next.c = next.c.filter(function (cat) {
+        if (!addedIds[cat.id]) return true;
+        return (Number(cat.already) || 0) > 0 || (Number(cat.planned) || 0) > 0;
+      });
+      droppedZero = true;
+    }
+    return {
+      budget: next,
+      changed: true,
+      added: added.length,
+      droppedZero: droppedZero,
+      lineCount: next.c.length
+    };
+  }
+
+  function pad2(n) {
+    return (n < 10 ? '0' : '') + n;
+  }
+
+  function chicagoParts(date) {
+    var d = date ? new Date(date) : new Date();
+    if (isNaN(d.getTime())) d = new Date();
+    var parts = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    }).formatToParts(d).forEach(function (part) {
+      if (part.type !== 'literal') parts[part.type] = part.value;
+    });
+    return parts;
+  }
+
+  function chicagoYearMonth(date) {
+    var parts = chicagoParts(date);
+    return parts.year + '-' + parts.month;
+  }
+
+  function previousYearMonth(ym) {
+    ym = String(ym || chicagoYearMonth());
+    var y = parseInt(ym.slice(0, 4), 10);
+    var m = parseInt(ym.slice(5, 7), 10);
+    if (!isFinite(y) || !isFinite(m)) return chicagoYearMonth();
+    m -= 1;
+    if (m < 1) { m = 12; y -= 1; }
+    return y + '-' + pad2(m);
+  }
+
+  function formatDateTimeChicago(ms) {
+    var parts = chicagoParts(ms);
+    return parts.month + '/' + parts.day + '/' + parts.year + ' ' + parts.hour + ':' + parts.minute + ' ' + (parts.dayPeriod || '') + ' CT';
+  }
+
+  function validateWebhookUrl(url) {
+    url = String(url || '').trim();
+    if (!url) return { ok: true, url: '', hint: '' };
+    var lower = url.toLowerCase();
+    if (lower.indexOf('javascript:') === 0 || lower.indexOf('data:') === 0) {
+      return { ok: false, error: 'URL' };
+    }
+    var isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+    var isHttps = /^https:\/\//i.test(url);
+    if (!isHttps && !isLocal) return { ok: false, error: 'HTTPS' };
+    var hint = '';
+    if (/script\.google\.com\/macros\/s\/[^/]+\/exec/i.test(url)) hint = 'apps-script';
+    else if (isLocal) hint = 'local';
+    else hint = 'other';
+    return { ok: true, url: url, hint: hint };
+  }
+
+  function setWebhookUrl(budget, url) {
+    var checked = validateWebhookUrl(url);
+    if (!checked.ok) {
+      var err = new Error(checked.error);
+      err.code = checked.error;
+      throw err;
+    }
+    return withMeta(budget, { k: checked.url });
+  }
+
+  function markWebhookResult(budget, fields) {
+    var next = withMeta(budget);
+    next.n = (fields && fields.at) || Date.now();
+    next.o = fields && fields.ok ? 1 : 0;
+    if (fields && fields.ok && fields.month) next.m = String(fields.month);
+    return next;
+  }
+
+  function postWebhook(url, payload) {
+    return fetch(url, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(function () {
+      return { ok: true };
+    });
+  }
+
+  function expensesInMonth(budget, yearMonth) {
+    var prefix = String(yearMonth || '');
+    return ((budget && budget.e) || []).filter(function (item) {
+      return String(item.date || '').slice(0, 7) === prefix;
+    });
+  }
+
+  function buildMonthlyPayload(budget, reportMonth, sentBy) {
+    var track = plannedTracking(budget);
+    var spent = spentOf(budget);
+    var left = leftOf(budget);
+    var monthExpenses = expensesInMonth(budget, reportMonth);
+    var monthTotal = 0;
+    monthExpenses.forEach(function (item) { monthTotal += Number(item.amount) || 0; });
+    return {
+      office: 'Callahan Office',
+      generatedAt: new Date().toISOString(),
+      reportMonth: reportMonth,
+      periodStart: (budget && budget.p) || currentBienniumStart(),
+      periodEnd: nextBienniumStart(budget && budget.p),
+      bienniumBudget: moneyRound(budget && budget.t),
+      alreadySpent: moneyRound(budget && budget.s),
+      totalSpent: moneyRound(spent),
+      left: moneyRound(left),
+      percentUsed: budget && budget.t ? Math.round((spent / budget.t) * 100) : 0,
+      planned: track.categories.map(function (row) {
+        return {
+          name: row.groupName ? (row.groupName + ' / ' + row.name) : row.name,
+          planned: row.planned,
+          spent: row.spent,
+          left: row.left,
+          percentUsed: row.usedPct
+        };
+      }),
+      unplanned: {
+        total: track.unplannedSpent,
+        unitemized: track.unitemized,
+        groups: track.unplannedGroups
+      },
+      expensesThisMonth: moneyRound(monthTotal),
+      expenseCountThisMonth: monthExpenses.length,
+      sentBy: sentBy || ''
+    };
+  }
+
+  function measurePlanCapacity(options) {
+    options = options || {};
+    var base = emptyBudget(DEFAULT_TOTAL, SUGGESTED_STARTING, '2025-01-06');
+    if (options.webhook) base.k = options.webhook;
+    if (options.period) base.p = options.period;
+    var applied = ensureOfficeCategories(base);
+    var budget = applied.budget;
+    var n = options.expenses || 0;
+    var i;
+    for (i = 0; i < n; i++) {
+      budget.e.push({
+        id: 'x' + i,
+        date: '2026-03-15',
+        desc: 'Example expense line',
+        catPacked: packCustomId((budget.c[0] && budget.c[0].id) || '1'),
+        amount: 12.34,
+        by: 'Amy-Rose'
+      });
+    }
+    var info = storageInfo(budget);
+    info.includeZero = !applied.droppedZero;
+    info.lineCount = applied.lineCount;
+    info.added = applied.added;
+    return info;
+  }
+
+
   root.BudgetSync = {
     STORAGE_KEY: STORAGE_KEY,
     DEFAULT_TOTAL: DEFAULT_TOTAL,
@@ -801,7 +1239,9 @@
     CATEGORIES: CATEGORIES,
     OTHER_INDEX: OTHER_INDEX,
     SUGGESTED_STARTING: SUGGESTED_STARTING,
+    ASSET_VERSION: ASSET_VERSION,
     publicBaseUrl: publicBaseUrl,
+    assetUrl: assetUrl,
     iconUrl: iconUrl,
     firstMondayOfJanuary: firstMondayOfJanuary,
     currentBienniumStart: currentBienniumStart,
@@ -855,6 +1295,25 @@
     sortExpenses: sortExpenses,
     categoryTotals: categoryTotals,
     plannedTracking: plannedTracking,
+    UNITEMIZED_LABEL: UNITEMIZED_LABEL,
+    OFFICE_GROUPS: OFFICE_GROUPS,
+    OFFICE_LINES: OFFICE_LINES,
+    OFFICE_PLANNED_2027: OFFICE_PLANNED_2027,
+    OFFICE_ACTUAL_2025: OFFICE_ACTUAL_2025,
+    ensureOfficeCategories: ensureOfficeCategories,
+    groupClassFor: groupClassFor,
+    chicagoYearMonth: chicagoYearMonth,
+    previousYearMonth: previousYearMonth,
+    formatDateTimeChicago: formatDateTimeChicago,
+    validateWebhookUrl: validateWebhookUrl,
+    setWebhookUrl: setWebhookUrl,
+    markWebhookResult: markWebhookResult,
+    postWebhook: postWebhook,
+    buildMonthlyPayload: buildMonthlyPayload,
+    measurePlanCapacity: measurePlanCapacity,
+    moneyRound: moneyRound,
+    toCents: toCents,
+    fromCents: fromCents,
     frontBadges: frontBadges,
     detailBadges: detailBadges,
     applyTheme: applyTheme,
