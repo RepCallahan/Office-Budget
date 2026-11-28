@@ -61,7 +61,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261127c';
+  var ASSET_VERSION = '20261127d';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
@@ -1642,6 +1642,50 @@
     });
   }
 
+  // Posts a snapshot once per app open, plus once per expense add/edit/delete
+  // (debounced). Subsequent t.render / pluginData refreshes must call
+  // onLoadedOrRender() only — that will not queue another snapshot.
+  function createSnapshotScheduler(options) {
+    options = options || {};
+    var postFn = options.post;
+    var delay = options.delay != null ? Number(options.delay) : 800;
+    var setTimer = options.setTimeout || setTimeout;
+    var clearTimer = options.clearTimeout || clearTimeout;
+    var timer = null;
+    var opened = false;
+    var posts = [];
+
+    function queue(reason) {
+      if (reason === 'open') {
+        if (opened) return false;
+        opened = true;
+      } else if (reason !== 'expense') {
+        return false;
+      }
+      if (timer) clearTimer(timer);
+      timer = setTimer(function () {
+        timer = null;
+        posts.push(reason);
+        if (typeof postFn === 'function') postFn(reason);
+      }, delay);
+      return true;
+    }
+
+    return {
+      queue: queue,
+      onLoadedOrRender: function () { return queue('open'); },
+      onExpenseChanged: function () { return queue('expense'); },
+      postedReasons: function () { return posts.slice(); },
+      hasOpened: function () { return opened; },
+      reset: function () {
+        if (timer) clearTimer(timer);
+        timer = null;
+        opened = false;
+        posts = [];
+      }
+    };
+  }
+
   function expensesInMonth(budget, yearMonth) {
     var prefix = String(yearMonth || '');
     return ((budget && budget.e) || []).filter(function (item) {
@@ -1822,6 +1866,7 @@
     setWebhookUrl: setWebhookUrl,
     markWebhookResult: markWebhookResult,
     postWebhook: postWebhook,
+    createSnapshotScheduler: createSnapshotScheduler,
     buildMonthlyPayload: buildMonthlyPayload,
     measurePlanCapacity: measurePlanCapacity,
     moneyRound: moneyRound,

@@ -550,9 +550,14 @@ function renderSettings(budget) {
     var statusParts = [];
     if (!budget.k) statusParts.push('No webhook saved yet.');
     else statusParts.push('Webhook saved.');
-    if (budget.n) {
-      var when = BudgetSync.formatDateTimeChicago(budget.n);
-      statusParts.push(budget.o ? ('Last snapshot saved ' + when + '.') : ('Last snapshot try failed ' + when + '.'));
+    var statusInfo = webhookStatus || (budget.n ? { at: budget.n, ok: !!budget.o, kind: 'snapshot' } : null);
+    if (statusInfo && statusInfo.at) {
+      var when = BudgetSync.formatDateTimeChicago(statusInfo.at);
+      if (statusInfo.kind === 'email') {
+        statusParts.push(statusInfo.ok ? ('Last update sent ' + when + '.') : ('Last update try failed ' + when + '.'));
+      } else {
+        statusParts.push(statusInfo.ok ? ('Last snapshot saved ' + when + '.') : ('Last snapshot try failed ' + when + '.'));
+      }
     }
     if (budget.k) statusParts.push('On the last day of the month, Apps Script emails the latest snapshot. Expenses entered after the last open will not be in that email until someone opens the app. Apps Script responses cannot be read from Trello (the request is sent without CORS), so “saved” means the request left this browser without a network error.');
     text(status, statusParts.join(' '));
@@ -582,59 +587,30 @@ function renderBudget(budget) {
   }
 }
 
-var snapshotTimer = null;
-var snapshotBusy = false;
-var snapshotAgain = false;
-var SNAPSHOT_DEBOUNCE_MS = 800;
+var webhookStatus = null;
 
-function queueSnapshot() {
-  if (!currentBudget || !currentBudget.k) return;
-  if (snapshotTimer) clearTimeout(snapshotTimer);
-  snapshotTimer = setTimeout(runSnapshot, SNAPSHOT_DEBOUNCE_MS);
-}
-
-function runSnapshot() {
-  snapshotTimer = null;
-  var budget = currentBudget;
-  if (!budget || !budget.k) return;
-  if (snapshotBusy) {
-    snapshotAgain = true;
-    return;
-  }
-  snapshotBusy = true;
-  var month = BudgetSync.chicagoYearMonth();
-  var payload = BudgetSync.buildMonthlyPayload(budget, month, currentMemberName, 'snapshot');
-  BudgetSync.postWebhook(budget.k, payload).then(function () {
-    return BudgetSync.load(t).then(function (fresh) {
-      if (!fresh) return;
-      return BudgetSync.save(t, BudgetSync.markWebhookResult(fresh, { ok: true, month: month })).then(function () {
-        return BudgetSync.load(t).then(function (updated) {
-          if (updated) {
-            currentBudget = updated;
-            renderSettings(updated);
-          }
-        });
-      });
+var snapshotScheduler = BudgetSync.createSnapshotScheduler({
+  delay: 800,
+  post: function () {
+    var budget = currentBudget;
+    if (!budget || !budget.k) return;
+    var month = BudgetSync.chicagoYearMonth();
+    var payload = BudgetSync.buildMonthlyPayload(budget, month, currentMemberName, 'snapshot');
+    // Do not write pluginData after a snapshot. A save would fire t.render,
+    // which used to refresh and queue another snapshot in a tight loop.
+    BudgetSync.postWebhook(budget.k, payload).then(function () {
+      webhookStatus = { at: Date.now(), ok: true, month: month, kind: 'snapshot' };
+      if (currentBudget) renderSettings(currentBudget);
+    }).catch(function () {
+      webhookStatus = { at: Date.now(), ok: false, kind: 'snapshot' };
+      if (currentBudget) renderSettings(currentBudget);
     });
-  }).catch(function () {
-    return BudgetSync.load(t).then(function (fresh) {
-      if (!fresh) return;
-      return BudgetSync.save(t, BudgetSync.markWebhookResult(fresh, { ok: false })).then(function () {
-        return BudgetSync.load(t).then(function (updated) {
-          if (updated) {
-            currentBudget = updated;
-            renderSettings(updated);
-          }
-        });
-      });
-    }).catch(function () { return null; });
-  }).then(function () {
-    snapshotBusy = false;
-    if (snapshotAgain) {
-      snapshotAgain = false;
-      queueSnapshot();
-    }
-  });
+  }
+});
+
+function queueSnapshot(reason) {
+  if (!currentBudget || !currentBudget.k) return;
+  snapshotScheduler.queue(reason);
 }
 
 function showLoadedBudget(budget) {
@@ -642,7 +618,7 @@ function showLoadedBudget(budget) {
   showView('budget');
   renderBudget(budget);
   showSection(currentSection);
-  queueSnapshot();
+  queueSnapshot('open');
   return Promise.resolve();
 }
 
@@ -696,7 +672,9 @@ function deleteExpense(item) {
     if (!budget) return;
     return BudgetSync.save(t, BudgetSync.deleteExpense(budget, item.id)).then(function () {
       if (editingId === item.id) resetExpenseForm();
-      return refresh();
+      return refresh().then(function () {
+        queueSnapshot('expense');
+      });
     });
   }).catch(function () {
     window.alert('Could not delete that expense. Please try again.');
@@ -749,7 +727,9 @@ document.getElementById('expense-form').addEventListener('submit', function (eve
     return BudgetSync.save(t, BudgetSync.upsertExpense(budget, expense));
   }).then(function () {
     resetExpenseForm();
-    return refresh();
+    return refresh().then(function () {
+      queueSnapshot('expense');
+    });
   }).catch(function (e) {
     if (e && (e.code === 'FULL' || e.code === 'NEED_CARD' || (e.message && String(e.message).indexOf('4096') !== -1))) {
       BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
@@ -1049,18 +1029,12 @@ document.getElementById('webhook-send').addEventListener('click', function () {
   var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName, 'email');
   var url = currentBudget.k;
   BudgetSync.postWebhook(url, payload).then(function () {
-    return BudgetSync.load(t).then(function (budget) {
-      if (!budget) return;
-      return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: true })).then(refresh);
-    });
+    webhookStatus = { at: Date.now(), ok: true, month: month, kind: 'email' };
+    renderSettings(currentBudget);
   }).catch(function () {
-    return BudgetSync.load(t).then(function (budget) {
-      if (!budget) return;
-      return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: false })).then(function () {
-        BudgetSync.showError(err, 'The update could not be sent. Check the URL and try again.');
-        return refresh();
-      });
-    });
+    webhookStatus = { at: Date.now(), ok: false, kind: 'email' };
+    BudgetSync.showError(err, 'The update could not be sent. Check the URL and try again.');
+    renderSettings(currentBudget);
   });
 });
 
