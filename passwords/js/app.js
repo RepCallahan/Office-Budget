@@ -9,6 +9,14 @@ var toastTimer = null;
 
 Vault.applyTheme(t);
 
+// Reads and saves go through the store: Google storage once this board has been
+// moved (automatically, on first open), Trello until then. The script link comes
+// from Office Budget on this computer, or from Settings > Google storage.
+var store = Vault.createStore(t, {
+  canWrite: function () { return canWrite; },
+  link: function () { return OfficeCloud.rememberedUrl(); }
+});
+
 function $(id) { return document.getElementById(id); }
 function text(node, v) { if (node) node.textContent = v == null ? '' : String(v); }
 
@@ -87,7 +95,10 @@ function copyText(value, label) {
 function renderCapacity() {
   var cap = Vault.capacity(data);
   var banner = $('banner');
-  if (cap.missing && cap.missing.length) {
+  if (cap.cloudError) {
+    banner.hidden = false; banner.className = 'banner is-full';
+    banner.textContent = 'Office Passwords could not move to Google storage yet, so it is still using Trello and works as before. ' + Vault.saveErrorMessage(cap.cloudError);
+  } else if (cap.missing && cap.missing.length) {
     banner.hidden = false; banner.className = 'banner';
     banner.textContent = Vault.missingCardMessage();
   } else if (cap.needSetup) {
@@ -117,7 +128,35 @@ function renderSettings() {
   text($('meter-text'), Vault.storageLineText(cap));
   text($('meter-room'), data.length + ' saved. Room for about ' + cap.roomFor + ' more.');
   text($('ver'), Vault.ASSET_VERSION);
+  renderCloud(cap);
 }
+
+function renderCloud(cap) {
+  var google = !!cap.google;
+  text($('about-text'), google
+    ? 'Logins are stored in Google, in the Office Budget Email script, and only people with access to this board can open them. They are not encrypted.'
+    : 'Logins are stored on Password Storage cards on this Trello board and are visible to anyone who has access to the board. They are not encrypted. After you open this app once, you can archive the storage card (or its list) so it stays off the board — do not delete it.');
+  text($('cloud-status'), google
+    ? 'Logins are stored in Google.'
+    : 'Logins are still on Trello. Paste the Office Budget Email script link (the same Webhook URL Office Budget uses) and click Save link. Your logins then move to Google automatically.');
+  $('cloud-form').hidden = google || !canWrite;
+}
+
+$('cloud-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  text($('cloud-error'), '');
+  store.setLink($('cloud-url').value).then(function () {
+    return store.load();
+  }).then(function (d) {
+    data = d;
+    renderList();
+    renderSettings();
+    if (store.mode() === 'google') { $('cloud-url').value = ''; toast('Moved to Google'); }
+    else if (store.error()) text($('cloud-error'), Vault.saveErrorMessage(store.error()));
+  }).catch(function (err) {
+    text($('cloud-error'), Vault.saveErrorMessage(err));
+  });
+});
 
 /* ---------- logins list ---------- */
 function cell(label, kids) {
@@ -176,7 +215,7 @@ function renderList() {
 /* ---------- saving (always re-read first so two people don't overwrite each other) ---------- */
 function mutate(fn) {
   if (!canWrite) { return Promise.reject(new Error('You have view-only access to this board.')); }
-  return Vault.load(t).then(function (fresh) {
+  return store.load().then(function (fresh) {
     var err = fn(fresh);
     if (err) throw new Error(err);
     var cap = Vault.capacity(fresh);
@@ -184,7 +223,7 @@ function mutate(fn) {
     if (cap.full && cap.used > before.used && !cap.needCard && cap.cardCount) {
       throw new Error(Vault.fullMessage());
     }
-    return Vault.save(t, fresh).then(function () { data = fresh; }).catch(function (err) {
+    return store.save(fresh).then(function () { data = fresh; }).catch(function (err) {
       throw new Error(Vault.saveErrorMessage(err));
     });
   });
@@ -278,12 +317,16 @@ document.addEventListener('keydown', function (e) {
 /* ---------- start ---------- */
 t.render(function () {
   canWrite = typeof t.memberCanWriteToModel === 'function' ? t.memberCanWriteToModel('board') : true;
-  return Vault.load(t).then(function (d) {
+  return store.load().then(function (d) {
     data = d;
     renderList();
     text($('ver'), Vault.ASSET_VERSION);
-  }).catch(function () {
-    text($('banner'), 'Could not load logins. Close and reopen this window.');
+    if (!$('main').querySelector('[data-section-panel="settings"]').hidden) renderSettings();
+  }).catch(function (err) {
+    // Google could not be read: show a red message and keep the last list on
+    // screen. Nothing is written to Trello as a fallback.
+    $('banner').className = 'banner is-full';
+    text($('banner'), err && err.cloud ? Vault.saveErrorMessage(err) : 'Could not load logins. Close and reopen this window.');
     $('banner').hidden = false;
   });
 });

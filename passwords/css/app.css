@@ -152,3 +152,10 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-so
   .nav-btn { width: auto; }
 }
 .stack { display: flex; flex-direction: column; gap: 14px; }
+
+/* Google storage link form */
+.cloud-form { display: flex; gap: 10px; align-items: flex-end; margin-top: 12px; }
+.cloud-form[hidden] { display: none; }
+.cloud-form .field { flex: 1 1 auto; }
+.cloud-form input { width: 100%; }
+#cloud-error { margin-top: 8px; }
