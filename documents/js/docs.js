@@ -4,7 +4,10 @@
  * Everything is one flat list of short records:
  *   document:  ["d", id, title, url, description, "YYYY-MM-DD", sign(0|1), category, version, "YYYY-MM-DD updated"]
  *   signature: ["s", docId, memberId, memberName, typedName, "YYYY-MM-DDTHH:MMZ", version]
- *   bulletin:   ["b", id, title, message, url, "YYYY-MM-DD", active(0|1)]
+ *   bulletin / announcement:
+ *     ["b", id, title, message, url, "YYYY-MM-DD", active(0|1), authorId, authorName, created("YYYY-MM-DDTHH:MMZ")]
+ *     Older records without author/created still load; created falls back to the date.
+ *     The stable id + created stamp are what a later Signal sender can key off.
  *   ack:        ["k", bulletinId, memberId, memberName, "YYYY-MM-DDTHH:MMZ"]
  * A signature counts only for the document version it was made on. The admin can mark a document
  * "updated", which bumps its version so everyone signs again; older signatures are kept as history
@@ -26,8 +29,10 @@
   var LIMIT = 4096;          // Trello's per-scope cap
   var CAP = 3900;            // what we allow ourselves (leaves headroom for Trello's wrapper)
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128b';
+  var ASSET_VERSION = '20261128d';
   var MAX = { title: 80, url: 300, desc: 140, name: 60, message: 400 };
+  var MAX_FULL_ANNOUNCEMENTS = 12; // newest + all still-active keep a full message body
+  var TRIMMED_MESSAGE = 80;        // older ended announcements are shortened to this
   var CATEGORIES = ['Policies', 'Memos', 'Forms', 'Other'];
   var ADMIN_NAME_RE = /callahan/i;
   var STORAGE_NAME_RE = /^\s*document storage(?:\s+(\d+))?(?:\b.*)?$/i;
@@ -80,6 +85,11 @@
     }
     if (r[0] === 'b' && r.length >= 6) {
       var b = ['b', str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]), Number(r[6]) ? 1 : (r[6] === 0 || r[6] === '0' ? 0 : 1)];
+      b.push(str(r[7] || ''));
+      b.push(str(r[8] || ''));
+      var created = str(r[9] || '');
+      if (!created && b[5]) created = b[5] + 'T00:00Z';
+      b.push(created);
       return b;
     }
     if (r[0] === 'k' && r.length >= 5) return r.slice(0, 5).map(str);
@@ -173,7 +183,8 @@
   }
 
   function capacity(state) {
-    var p = plan(state.records, state.admin, state.cardIds);
+    if (state && state.google) return cloudCapacity(state);
+    var p = plan(state.records, state.admin, state.cardIds || []);
     var used = p.boardSize + p.chunks.reduce(function (s, c) { return s + c.size; }, 0);
     var limit = CAP * (1 + state.cardIds.length);
     var ratio = used / limit;
@@ -221,7 +232,7 @@
       }).catch(function () { return []; });
   }
 
-  function load(t) {
+  function loadTrello(t) {
     return Promise.resolve().then(function () { return t.get('board', 'shared', KEY); }).then(function (raw) {
       if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { raw = null; } }
       raw = raw && typeof raw === 'object' ? raw : {};
@@ -263,10 +274,11 @@
     return 'A Document Storage card cannot be found, so saving is turned off to protect your documents. Open the board menu > Archived items, send the “Document Storage” card (or its list) back to the board, keep it in an open list (collapse the list if you like), then reopen Office Hub.';
   }
 
-  /** Write the records out. Changes only chunks that differ. */
-  function save(t, state, records, admin) {
+  /** Write the records out. Changes only chunks that differ. Trello path only. */
+  function saveTrello(t, state, records, admin) {
     if (state.missing > 0) return errorWith('missing', missingMessage());
     admin = admin === undefined ? state.admin : admin;
+    records = trimAnnouncementHistory(records);
     return Promise.resolve().then(function () {
       var p = plan(records, admin, state.cardIds);
       if (p.tooBig) return errorWith('toobig', 'That entry is too large to save. Shorten the title, description, or link.');
@@ -277,7 +289,7 @@
         state.cardIds.push(id);
         state.cardNames.push(storageCardTitle(next));
         state.raw.cards.push('[]');
-        return save(t, state, records, admin).then(function () { return null; });
+        return saveTrello(t, state, records, admin).then(function () { return null; });
       });
     }).then(function (p) {
       if (!p) return state;
@@ -305,24 +317,68 @@
     });
   }
 
-
-
   function bulletinRecord(o) {
-    return ['b', o.id || newId(), o.title, o.message || '', o.url || '', o.date || today(), o.active === 0 ? 0 : 1];
+    return [
+      'b', o.id || newId(), o.title, o.message || '', o.url || '',
+      o.date || today(), o.active === 0 ? 0 : 1,
+      o.authorId || '', o.authorName || '', o.created || nowStamp()
+    ];
   }
   function ackRecord(bulletinId, member) {
     return ['k', bulletinId, member.id, member.name, nowStamp()];
+  }
+  function createdOfBulletin(r) {
+    return (r && r[9]) || (r && r[5] ? r[5] + 'T00:00Z' : '');
   }
   function bulletinsOf(records, activeOnly) {
     var out = [];
     records.forEach(function (r, i) {
       if (r[0] !== 'b') return;
-      var row = { id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: r[6] === 1, order: i };
+      var row = {
+        id: r[1], title: r[2], message: r[3], url: r[4], date: r[5],
+        active: r[6] === 1, authorId: r[7] || '', authorName: r[8] || '',
+        created: createdOfBulletin(r), order: i
+      };
       if (activeOnly && !row.active) return;
       out.push(row);
     });
-    out.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : b.order - a.order; });
+    out.sort(function (a, b) {
+      if (a.created < b.created) return 1;
+      if (a.created > b.created) return -1;
+      return b.order - a.order;
+    });
     return out;
+  }
+  /**
+   * Keep full message bodies on every active announcement and on the newest
+   * ones, up to MAX_FULL_ANNOUNCEMENTS. Older ended announcements get their
+   * message shortened so history (id, title, author, created) still fits.
+   */
+  function trimAnnouncementHistory(records) {
+    var list = [];
+    records.forEach(function (r, i) {
+      if (r[0] === 'b') list.push({ i: i, created: createdOfBulletin(r), active: r[6] === 1 || r[6] === '1', order: i });
+    });
+    list.sort(function (a, b) {
+      if (a.created < b.created) return 1;
+      if (a.created > b.created) return -1;
+      return b.order - a.order;
+    });
+    var kept = 0;
+    list.forEach(function (item) {
+      if (item.active || kept < MAX_FULL_ANNOUNCEMENTS) {
+        kept += 1;
+        return;
+      }
+      var r = records[item.i];
+      var msg = String(r[3] || '');
+      if (msg.length > TRIMMED_MESSAGE) {
+        var cut = msg.slice(0, TRIMMED_MESSAGE);
+        cut = cut.replace(/\s+\S*$/, '').replace(/\s+$/, '');
+        r[3] = cut + '…';
+      }
+    });
+    return records;
   }
   function acksOf(records, bulletinId) {
     var out = [];
@@ -442,27 +498,313 @@
     return 'You have ' + list.length + ' office bulletins to acknowledge';
   }
   /**
-   * Show a Trello board alert. Unacknowledged bulletins repeat every board load.
-   * Document alerts show at most once per tab session. If both apply, the bulletin
-   * takes the single Trello alert slot (Trello allows only one at a time).
+   * Board-load notices. Unacknowledged bulletins open a compact t.modal every
+   * board load (Trello always draws a header bar with an X; we pass a blank
+   * title so it does not say "Office Hub"). Document alerts stay as t.alert,
+   * at most once per tab session. If both apply, the bulletin takes priority
+   * and the document alert waits for a later load (or the button badge).
+   *
+   * The modal is opened at most once per connector-iframe lifetime so repeated
+   * board-buttons refreshes cannot loop or re-open it. Closing with the X
+   * without acknowledging does not record an ack; the next board load shows it again.
    */
+  var bulletinModalHandled = false;
+  function resetBulletinModalState() { bulletinModalHandled = false; }
+  function bulletinPopupUrl() { return './bulletin-popup.html?v=' + ASSET_VERSION; }
+  function openBulletinModal(t) {
+    if (bulletinModalHandled) return false;
+    if (!t || typeof t.modal !== 'function') return false;
+    bulletinModalHandled = true;
+    t.modal({
+      url: bulletinPopupUrl(),
+      title: '​',
+      fullscreen: false,
+      height: 240,
+      accentColor: '#1b365d'
+    });
+    return true;
+  }
   function maybeAlert(t, records, memberId, boardId) {
     var seen = readSeen(boardId, memberId);
     var info = alertForMember(records, memberId, seen);
     if (info.firstVisit || info.message) writeSeen(boardId, memberId, info.allIds);
-    var bull = bulletinAlertMessage(records, memberId);
-    var message = bull || info.message;
-    if (!message) return info;
-    if (!bull && wasAlerted(boardId, memberId)) return info;
-    if (!bull) markAlerted(boardId, memberId);
+    var unacked = unackedBulletins(records, memberId);
+    if (unacked.length) {
+      info.bulletin = true;
+      openBulletinModal(t);
+      return info;
+    }
+    if (!info.message) return info;
+    if (wasAlerted(boardId, memberId)) return info;
+    markAlerted(boardId, memberId);
     if (t && typeof t.alert === 'function') {
-      t.alert({ message: message, duration: 10, display: 'warning' });
+      t.alert({ message: info.message, duration: 10, display: 'warning' });
     }
     return info;
   }
   function rememberOpen(t, records, memberId) {
     if (!memberId) return;
     writeSeen(boardIdOf(t), memberId, docsOf(records).map(function (d) { return d.id; }));
+  }
+
+
+  /* ---------- Google storage (see js/cloud.js) ---------- */
+  var CLOUD_APP = 'hub';
+  var CLOUD_LIMIT = 300000;
+  var CACHE_PREFIX = 'office-hub-cache:';
+  var ALERT_FETCH_MS = 8000;
+  var ALERT_CACHE_WAIT_MS = 4000;
+
+  function cloudLib() {
+    return root.OfficeCloud || (typeof globalThis !== 'undefined' && globalThis.OfficeCloud) || null;
+  }
+  function cloudBody(records, admin) {
+    return JSON.stringify({ a: admin || [], r: records || [] });
+  }
+  function cloudCountOf(body) {
+    var raw = JSON.parse(body);
+    if (!raw || !Array.isArray(raw.r)) throw new Error('bad');
+    return raw.r.length;
+  }
+  function fromCloud(r, cfg) {
+    var raw = {};
+    if (r && r.has && r.body) {
+      try { raw = JSON.parse(r.body); } catch (e) { raw = {}; }
+    }
+    var admin = Array.isArray(raw.a) && raw.a[0] ? [String(raw.a[0]), String(raw.a[1] || '')] : null;
+    return {
+      records: cleanRecords(raw.r),
+      admin: admin,
+      cardIds: [],
+      cardNames: [],
+      missing: 0,
+      expected: 0,
+      google: true,
+      rev: (r && r.rev) || 0,
+      cfg: cfg || null,
+      raw: { board: (r && r.body) || '', cards: [] }
+    };
+  }
+  function cloudCapacity(state) {
+    var used = cloudBody(state.records, state.admin).length;
+    var n = (state.records || []).length;
+    var avg = n ? Math.max(60, Math.round(used / n)) : 200;
+    var ratio = used / CLOUD_LIMIT;
+    var full = used > CLOUD_LIMIT;
+    return {
+      google: true, used: used, limit: CLOUD_LIMIT, ratio: ratio,
+      percent: full ? 100 : Math.min(99, Math.round(ratio * 100)),
+      warn: !full && ratio >= WARN_RATIO, full: full,
+      roomFor: Math.max(0, Math.floor((CLOUD_LIMIT - used) / avg)),
+      cardCount: 0, needCard: false, nextTitle: '', cloudError: state.cloudError || null
+    };
+  }
+  function attachCloudError(state, err) {
+    if (!state) return state;
+    state.cloudError = err;
+    return state;
+  }
+  function saveErrorMessage(err) {
+    var Cloud = cloudLib();
+    if (err && err.cloud && Cloud) return Cloud.errorMessage(err, 'Office Hub');
+    if (err && err.code === 'needcard') return err.message || needCardMessage(err.title);
+    if (err && err.code === 'missing') return err.message || missingMessage();
+    return (err && err.message) || 'Could not save. Please try again.';
+  }
+  function storageLineText(cap) {
+    if (cap && cap.google) {
+      return 'Documents, signatures, and announcements are stored in Google (in the Office Budget Email script). Storage used: ' + cap.percent + '% (' + cap.used.toLocaleString() + ' of ' + cap.limit.toLocaleString() + ' characters).';
+    }
+    return (cap && cap.percent) + '% of storage used (' + (cap && cap.used && cap.used.toLocaleString()) + ' of ' + (cap && cap.limit && cap.limit.toLocaleString()) + ' characters).';
+  }
+
+  function readAlertCache(boardId) {
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage) return null;
+      var raw = localStorage.getItem(CACHE_PREFIX + String(boardId || 'board'));
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || !Array.isArray(o.records)) return null;
+      return { records: cleanRecords(o.records), rev: o.rev || 0, at: o.at || 0, admin: o.admin || null };
+    } catch (e) { return null; }
+  }
+  function writeAlertCache(boardId, state) {
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage || !state) return;
+      localStorage.setItem(CACHE_PREFIX + String(boardId || 'board'), JSON.stringify({
+        records: state.records || [], rev: state.rev || 0, at: Date.now(), admin: state.admin || null
+      }));
+    } catch (e) {}
+  }
+
+  function load(t, opts) {
+    opts = opts || {};
+    var Cloud = cloudLib();
+    if (!Cloud) return loadTrello(t);
+    return Cloud.getConfig(t).then(function (cfg) {
+      if (!Cloud.isOn(cfg)) return loadTrello(t);
+      Cloud.rememberUrl(cfg.u);
+      return Cloud.getWithClaim(cfg, CLOUD_APP, opts).then(function (r) {
+        var state = fromCloud(r, cfg);
+        writeAlertCache(boardIdOf(t), state);
+        return state;
+      });
+    });
+  }
+
+  function save(t, state, records, admin, opts) {
+    if (state && state.google) {
+      var Cloud = cloudLib();
+      if (!Cloud) return errorWith('NETWORK', 'Google storage is not available.');
+      admin = admin === undefined ? state.admin : admin;
+      var body = cloudBody(records, admin);
+      if (body.length > CLOUD_LIMIT) {
+        var too = Cloud.makeErr('TOO_BIG');
+        too.cloud = true;
+        return Promise.reject(too);
+      }
+      var cfg = state.cfg;
+      return Cloud.put(cfg.u, CLOUD_APP, cfg.s, body, state.rev, false, opts || {}).then(function (r) {
+        var next = fromCloud({ has: true, body: body, rev: r.rev }, cfg);
+        writeAlertCache(boardIdOf(t), next);
+        return next;
+      }, function (err) {
+        if (err && typeof err === 'object') err.cloud = true;
+        throw err;
+      });
+    }
+    return saveTrello(t, state, records, admin);
+  }
+
+  /**
+   * Board-load path: if this board is already on Google, read Google (source of
+   * truth) with a short timeout, and use the last cached copy if Google is slow
+   * or fails. Does not start a migration.
+   */
+  function loadForAlerts(t, boardId, opts) {
+    opts = opts || {};
+    var Cloud = cloudLib();
+    boardId = boardId || boardIdOf(t);
+    if (!Cloud) return loadTrello(t);
+    return Cloud.getConfig(t).then(function (cfg) {
+      if (!Cloud.isOn(cfg)) return loadTrello(t);
+      var cached = readAlertCache(boardId);
+      var fetch = Cloud.getWithClaim(cfg, CLOUD_APP, { fetch: opts.fetch, timeout: opts.timeout || ALERT_FETCH_MS }).then(function (r) {
+        var state = fromCloud(r, cfg);
+        writeAlertCache(boardId, state);
+        return state;
+      });
+      if (!cached) return fetch;
+      var settled = false;
+      var fromCache = new Promise(function (resolve) {
+        setTimeout(function () {
+          if (settled) return;
+          resolve({
+            records: cached.records, admin: cached.admin, google: true, fromCache: true,
+            cardIds: [], cardNames: [], missing: 0, expected: 0, rev: cached.rev, cfg: cfg,
+            raw: { board: '', cards: [] }
+          });
+        }, opts.cacheWait || ALERT_CACHE_WAIT_MS);
+      });
+      fetch.then(function () { settled = true; }, function () { settled = true; });
+      return Promise.race([fetch, fromCache]).catch(function (err) {
+        if (cached) {
+          return {
+            records: cached.records, admin: cached.admin, google: true, fromCache: true,
+            cloudError: err, cardIds: [], cardNames: [], missing: 0, expected: 0,
+            rev: cached.rev, cfg: cfg, raw: { board: '', cards: [] }
+          };
+        }
+        throw err;
+      });
+    });
+  }
+
+  /**
+   * Where data is read from and saved to. Google once the board has {on:1}
+   * in pluginData "g"; Trello until then. The first open by someone who can
+   * edit moves the Trello copy to Google automatically (once). Trello data is
+   * never changed by the move and never written again in Google mode.
+   * opts.link() may return a script link (e.g. the one Office Budget uses).
+   */
+  function createStore(t, opts) {
+    opts = opts || {};
+    var Cloud = opts.cloud || cloudLib();
+    var ro = { fetch: opts.fetch, timeout: opts.timeout };
+    var st = { mode: 'trello', cfg: null, rev: 0, migrating: null, tried: false, error: null, link: '' };
+    function canWrite() { return typeof opts.canWrite === 'function' ? !!opts.canWrite() : true; }
+    function mark(err) { if (err && typeof err === 'object') err.cloud = true; return err; }
+    function loadGoogle() {
+      Cloud.rememberUrl(st.cfg.u);
+      return Cloud.getWithClaim(st.cfg, CLOUD_APP, ro).then(function (r) {
+        st.rev = r.rev;
+        var state = fromCloud(r.has ? r : { has: false, rev: r.rev }, st.cfg);
+        writeAlertCache(boardIdOf(t), state);
+        return state;
+      }, function (err) { throw mark(err); });
+    }
+    function migrate(url, data) {
+      st.tried = true;
+      var run = Cloud.connect(t, {
+        app: CLOUD_APP, url: url, fetch: opts.fetch, timeout: opts.timeout,
+        readLocal: function () {
+          return { body: cloudBody(data.records, data.admin), count: (data.records || []).length };
+        },
+        countOf: cloudCountOf
+      }).then(function (cfg) {
+        st.cfg = cfg; st.mode = 'google'; st.error = null;
+        return loadGoogle();
+      }, function (err) {
+        st.error = mark(err);
+        return attachCloudError(data, err);
+      });
+      st.migrating = run.then(function (v) { st.migrating = null; return v; }, function (e) { st.migrating = null; throw e; });
+      return st.migrating;
+    }
+    function storeLoad() {
+      if (st.migrating) return st.migrating;
+      return Cloud.getConfig(t).then(function (cfg) {
+        if (Cloud.isOn(cfg)) {
+          st.cfg = cfg; st.mode = 'google';
+          return loadGoogle();
+        }
+        st.mode = 'trello';
+        return loadTrello(t).then(function (data) {
+          var hint = typeof opts.link === 'function' ? opts.link() : '';
+          var url = st.link || (cfg && cfg.u) || hint;
+          if (st.tried || !canWrite() || !Cloud.isScriptUrl(url)) {
+            return st.error ? attachCloudError(data, st.error) : data;
+          }
+          return migrate(url, data);
+        });
+      });
+    }
+    function storeSave(data, admin) {
+      if (st.mode !== 'google') return saveTrello(t, data, data.records, admin === undefined ? data.admin : admin);
+      var body = cloudBody(data.records, admin === undefined ? data.admin : admin);
+      if (body.length > CLOUD_LIMIT) return Promise.reject(mark(Cloud.makeErr('TOO_BIG')));
+      return Cloud.put(st.cfg.u, CLOUD_APP, st.cfg.s, body, st.rev, false, ro).then(function (r) {
+        st.rev = r.rev;
+        var next = fromCloud({ has: true, body: body, rev: r.rev }, st.cfg);
+        writeAlertCache(boardIdOf(t), next);
+        return next;
+      }, function (err) { throw mark(err); });
+    }
+    function setLink(url) {
+      if (!Cloud.isScriptUrl(url)) return Promise.reject(mark(Cloud.makeErr('URL')));
+      st.link = Cloud.cleanUrl(url);
+      st.tried = false;
+      st.error = null;
+      Cloud.rememberUrl(st.link);
+      return Promise.resolve();
+    }
+    return {
+      load: storeLoad,
+      save: storeSave,
+      setLink: setLink,
+      mode: function () { return st.mode; },
+      error: function () { return st.error; }
+    };
   }
 
   root.Docs = {
@@ -472,16 +814,25 @@
     docRecord: docRecord, sigRecord: sigRecord, docsOf: docsOf, sigsOf: sigsOf, findSig: findSig, hasSigs: hasSigs,
     bulletinRecord: bulletinRecord, ackRecord: ackRecord, bulletinsOf: bulletinsOf, acksOf: acksOf,
     findAck: findAck, unackedBulletins: unackedBulletins,
+    trimAnnouncementHistory: trimAnnouncementHistory,
+    MAX_FULL_ANNOUNCEMENTS: MAX_FULL_ANNOUNCEMENTS, TRIMMED_MESSAGE: TRIMMED_MESSAGE, nowStamp: nowStamp,
     cleanRecords: cleanRecords, normalizeUrl: normalizeUrl,
     nameMatchesAdmin: nameMatchesAdmin, isAdmin: isAdmin,
     plan: plan, capacity: capacity, load: load, save: save, mutate: mutate,
+    loadTrello: loadTrello, saveTrello: saveTrello,
     whoAmI: whoAmI, boardMembers: boardMembers,
     needCardMessage: needCardMessage, missingMessage: missingMessage,
+    saveErrorMessage: saveErrorMessage, storageLineText: storageLineText,
+    createStore: createStore, loadForAlerts: loadForAlerts,
+    readAlertCache: readAlertCache, writeAlertCache: writeAlertCache,
+    cloudBody: cloudBody, cloudCountOf: cloudCountOf, fromCloud: fromCloud,
+    CLOUD_APP: CLOUD_APP, CLOUD_LIMIT: CLOUD_LIMIT,
     boardIdOf: boardIdOf, readSeen: readSeen, writeSeen: writeSeen,
     wasAlerted: wasAlerted, markAlerted: markAlerted,
     pendingDocs: pendingDocs, alertForMember: alertForMember, maybeAlert: maybeAlert,
     rememberOpen: rememberOpen, actionCount: actionCount, buttonTextFor: buttonTextFor,
-    bulletinAlertMessage: bulletinAlertMessage
+    bulletinAlertMessage: bulletinAlertMessage, openBulletinModal: openBulletinModal,
+    resetBulletinModalState: resetBulletinModalState, bulletinPopupUrl: bulletinPopupUrl
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.Docs;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

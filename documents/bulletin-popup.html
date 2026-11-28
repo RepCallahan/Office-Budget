@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Office Bulletin</title>
+    <link rel="stylesheet" href="./css/bulletin-popup.css?v=20261128d">
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  </head>
+  <body>
+    <div id="wrap">
+      <img class="bp-seal" src="./img/wi-seal.png?v=20261128d" width="192" height="200" alt="">
+      <div class="bp-body">
+        <p class="bp-kicker">Office Bulletin</p>
+        <h1 class="bp-title" id="bp-title"></h1>
+        <p class="bp-msg" id="bp-msg"></p>
+        <p class="bp-count" id="bp-count" hidden></p>
+        <p class="bp-error" id="bp-error" role="alert"></p>
+        <div class="bp-actions">
+          <a class="btn ghost" id="bp-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Click here</a>
+          <button type="button" class="primary" id="bp-ack">Acknowledge</button>
+        </div>
+      </div>
+    </div>
+    <script src="./js/cloud.js?v=20261128d"></script>
+    <script src="./js/docs.js?v=20261128d"></script>
+    <script src="./js/bulletin-popup.js?v=20261128d"></script>
+  </body>
+</html>

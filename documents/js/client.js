@@ -16,9 +16,9 @@ TrelloPowerUp.initialize({
       });
     }
     return Docs.whoAmI(t).then(function (me) {
-      return Docs.load(t).then(function (state) {
-        var id = me && me.id;
-        var boardId = Docs.boardIdOf(t);
+      var id = me && me.id;
+      var boardId = Docs.boardIdOf(t);
+      return Docs.loadForAlerts(t, boardId).then(function (state) {
         Docs.maybeAlert(t, state.records, id, boardId);
         return [{
           icon: Docs.iconUrl(),

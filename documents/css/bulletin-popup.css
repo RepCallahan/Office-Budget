@@ -1,0 +1,48 @@
+/* Compact Office Bulletin modal (opened on the Trello board). */
+:root {
+  --text: #172b4d; --muted: #5b6b82;
+  --navy: #1b365d; --navy-hover: #142846; --navy-soft: #e8eef6;
+  --red: #b91c1c;
+  --line: #e3e8ef; --panel: #ffffff;
+  --radius-sm: 10px;
+  --font: ui-sans-serif, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body {
+  margin: 0; padding: 0; background: #fff; color: var(--text);
+  font-family: var(--font); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; overflow: hidden;
+}
+#wrap {
+  display: flex; gap: 16px; align-items: flex-start;
+  padding: 16px 18px 18px;
+}
+.bp-seal { width: 72px; height: auto; flex: 0 0 72px; display: block; margin-top: 2px; }
+.bp-body { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+.bp-kicker {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--navy); margin: 0;
+}
+.bp-title {
+  margin: 0; font-size: 18px; font-weight: 650; color: var(--navy);
+  letter-spacing: -.02em; overflow-wrap: anywhere;
+}
+.bp-msg {
+  margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.bp-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.bp-count { margin: 0; font-size: 12px; color: var(--muted); }
+.bp-error { margin: 0; color: var(--red); font-size: 13px; font-weight: 550; }
+.bp-error:empty { display: none; }
+
+button, .btn {
+  appearance: none; border: 0; border-radius: var(--radius-sm); padding: 9px 16px;
+  font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+  text-decoration: none; display: inline-block; text-align: center; white-space: nowrap;
+}
+.primary { background: var(--navy); color: #fff; }
+.primary:hover { background: var(--navy-hover); }
+.primary:disabled { opacity: .55; cursor: default; }
+.ghost { background: var(--panel); color: var(--navy); border: 1px solid var(--line); }
+.ghost:hover { border-color: var(--navy); }

@@ -6,6 +6,10 @@ var state = null;      // { records, admin, cardIds, ... }
 var me = null;         // { id, name, username } or null
 var members = [];      // board members (used for the admin's "not yet signed" list)
 var canWrite = true;
+var store = Docs.createStore(t, {
+  canWrite: function () { return canWrite; },
+  link: function () { return (typeof OfficeCloud !== 'undefined' && OfficeCloud.rememberedUrl) ? OfficeCloud.rememberedUrl() : ''; }
+});
 var query = '';
 var catFilter = '';
 var editId = null;     // id of document being edited, or null when adding
@@ -22,6 +26,41 @@ function el(tag, cls, s) {
   return n;
 }
 function isAdmin() { return Docs.isAdmin(me, state && state.admin); }
+
+function submitBtn(event) {
+  var form = event && event.target;
+  return (event && event.submitter) || (form && form.querySelector ? form.querySelector('button[type="submit"]') : null);
+}
+function isBusy(btn) { return !!(btn && btn.getAttribute('data-busy') === '1'); }
+function withDots(btn, promise) {
+  if (!btn) return promise;
+  var label = btn.innerHTML;
+  var wasDisabled = btn.disabled;
+  var box = btn.getBoundingClientRect();
+  btn.setAttribute('data-busy', '1');
+  btn.setAttribute('aria-busy', 'true');
+  if (box.width) btn.style.width = box.width + 'px';
+  if (box.height) btn.style.height = box.height + 'px';
+  btn.classList.add('is-saving');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="saving-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="sr-only">Saving…</span>';
+  function done() {
+    btn.innerHTML = label;
+    btn.style.width = '';
+    btn.style.height = '';
+    btn.classList.remove('is-saving');
+    btn.removeAttribute('aria-busy');
+    btn.removeAttribute('data-busy');
+    btn.disabled = wasDisabled;
+  }
+  return Promise.resolve(promise).then(function (v) { done(); return v; }, function (e) { done(); throw e; });
+}
+function hideLoader() {
+  var loader = $('app-loader');
+  if (!loader || loader.classList.contains('is-done')) return;
+  loader.classList.add('is-done');
+  setTimeout(function () { if (loader.parentNode) loader.parentNode.removeChild(loader); }, 400);
+}
 
 /* ---------- dates ---------- */
 var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -84,6 +123,7 @@ function showSection(name) {
     s.hidden = s.getAttribute('data-section-panel') !== name;
   });
   if (name === 'settings') renderSettings();
+  if (name === 'announcements') renderAnnouncements();
 }
 document.querySelectorAll('.nav-btn').forEach(function (b) {
   b.addEventListener('click', function () { showSection(b.getAttribute('data-section')); });
@@ -216,8 +256,13 @@ function renderList() {
 
 function renderBanners() {
   var cap = Docs.capacity(state);
-  if (state.missing > 0) showBanner(Docs.missingMessage());
+  var ban = $('banner');
+  if (state.cloudError) {
+    showBanner('Office Hub could not move to Google storage yet, so it is still using Trello and works as before. ' + Docs.saveErrorMessage(state.cloudError));
+    if (ban) ban.className = 'banner is-full';
+  } else if (state.missing > 0) showBanner(Docs.missingMessage());
   else if (cap.full) showBanner(Docs.needCardMessage(cap.nextTitle));
+  else if (cap.warn && cap.google) showBanner('Google storage is ' + cap.percent + '% full. Room for about ' + cap.roomFor + ' more items.');
   else if (cap.warn) showBanner('Storage is ' + cap.percent + '% full. Soon you will need to add a card named “' + cap.nextTitle + '” to an open list (never archived).');
   else showBanner('');
 }
@@ -225,15 +270,33 @@ function renderBanners() {
 /* ---------- settings ---------- */
 function renderSettings() {
   var cap = Docs.capacity(state);
+  var google = !!(state && state.google);
   var fill = $('meter-fill');
   fill.style.width = Math.max(2, cap.percent) + '%';
   fill.classList.toggle('is-warn', cap.warn || cap.full);
-  text($('meter-text'), cap.percent + '% of storage used (' + cap.used.toLocaleString() + ' of ' + cap.limit.toLocaleString() + ' characters)');
-  text($('meter-room'), 'Room for about ' + cap.roomFor + ' more documents or signatures.');
-  text($('meter-cards'), state.cardIds.length
-    ? 'Storage cards found: ' + state.cardNames.join('; ')
-    : 'No storage cards yet. They are only needed when this board-level space fills up. Then add a card named “' + cap.nextTitle + '”.');
+  text($('meter-text'), Docs.storageLineText(cap));
+  text($('meter-room'), 'Room for about ' + cap.roomFor + ' more documents, signatures, or announcements.');
+  if ($('meter-cards')) {
+    $('meter-cards').hidden = google;
+    if (!google) {
+      text($('meter-cards'), state.cardIds.length
+        ? 'Storage cards found: ' + state.cardNames.join('; ')
+        : 'No storage cards yet. They are only needed when this board-level space fills up. Then add a card named “' + cap.nextTitle + '”.');
+    }
+  }
+  if ($('storage-card-note')) $('storage-card-note').hidden = google;
   text($('ver'), Docs.ASSET_VERSION);
+  if ($('cloud-status')) {
+    text($('cloud-status'), google
+      ? 'Documents, signatures, and announcements are stored in Google.'
+      : 'Data is still on Trello. If you have already opened Office Budget on this computer, Office Hub will pick up the script link and move by itself. Otherwise paste the same Apps Script link (the Webhook URL from Office Budget’s Settings) and click Save link.');
+  }
+  if ($('cloud-form')) $('cloud-form').hidden = google || !canWrite;
+  if ($('about-text')) {
+    text($('about-text'), google
+      ? 'Documents live on Google Drive. Titles, links, signatures, and announcements are stored in Google, in the Office Budget Email script, and only people with access to this board can open them. Staff see only their own signature and acknowledgements. That is hidden from view, not encrypted.'
+      : 'Documents live on Google Drive. This app only keeps the titles, links, signatures, and announcements, and stores them on this Trello board. Staff see only their own signature and acknowledgements. That is hidden from view, not encrypted: someone technical with board access could read the raw Trello data.');
+  }
 
   var actions = $('admin-actions');
   actions.textContent = '';
@@ -250,9 +313,10 @@ function renderSettings() {
     var b = el('button', cls, label);
     b.type = 'button';
     b.addEventListener('click', function () {
-      Docs.mutate(t, function (recs) { return recs; }, function () { return pair; }).then(function (s) {
+      if (isBusy(b)) return;
+      withDots(b, Docs.mutate(t, function (recs) { return recs; }, function () { return pair; }).then(function (s) {
         state = s; renderAll(); renderSettings(); toast(doneMsg);
-      }).catch(function (err) { toast(err.message || 'Could not save'); });
+      })).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
     });
     actions.appendChild(b);
   }
@@ -267,7 +331,7 @@ function guardWrite() {
   return true;
 }
 function refresh(s) { state = s; renderAll(); }
-function renderAll() { renderList(); }
+function renderAll() { renderList(); renderAnnouncements(); }
 
 /* ---------- add / edit ---------- */
 function openForm(id) {
@@ -306,6 +370,8 @@ $('f-cancel').addEventListener('click', closeForm);
 
 $('doc-form').addEventListener('submit', function (e) {
   e.preventDefault();
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
   if (!guardWrite()) return;
   var title = $('f-title').value.trim();
   if (!title) { text($('form-error'), 'Please enter a title.'); return; }
@@ -317,7 +383,7 @@ $('doc-form').addEventListener('submit', function (e) {
   var bump = !$('f-bump-wrap').hidden && $('f-bump').checked && isAdmin();
   var id = editId;
   var admin = isAdmin();
-  Docs.mutate(t, function (recs) {
+  withDots(btn, Docs.mutate(t, function (recs) {
     if (id) {
       var at = -1;
       recs.forEach(function (r, k) { if (r[0] === 'd' && r[1] === id) at = k; });
@@ -334,7 +400,7 @@ $('doc-form').addEventListener('submit', function (e) {
   }).then(function (s) {
     closeForm(); refresh(s);
     toast(bump ? 'Saved. Everyone must sign again.' : 'Saved');
-  }).catch(function (err) { text($('form-error'), err.message || 'Could not save. Please try again.'); });
+  })).catch(function (err) { text($('form-error'), Docs.saveErrorMessage(err)); });
 });
 
 /* ---------- sign ---------- */
@@ -354,6 +420,8 @@ $('s-cancel').addEventListener('click', closeSign);
 
 $('sign-form').addEventListener('submit', function (e) {
   e.preventDefault();
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
   if (!guardWrite() || !me) return;
   var typed = $('s-name').value.trim().replace(/\s+/g, ' ');
   if (typed.length < 3) { text($('sign-error'), 'Please type your full name.'); return; }
@@ -361,7 +429,7 @@ $('sign-form').addEventListener('submit', function (e) {
   var seenVersion = null;
   Docs.docsOf(state.records).forEach(function (x) { if (x.id === id) seenVersion = x.version; });
   var problem = '';
-  Docs.mutate(t, function (recs) {
+  withDots(btn, Docs.mutate(t, function (recs) {
     var cur = null;
     Docs.docsOf(recs).forEach(function (x) { if (x.id === id) cur = x; });
     if (!cur) { problem = 'This document was removed.'; return null; }
@@ -372,7 +440,7 @@ $('sign-form').addEventListener('submit', function (e) {
   }).then(function (s) {
     closeSign(); refresh(s);
     toast(problem || 'Signed. Thank you.');
-  }).catch(function (err) { text($('sign-error'), err.message || 'Could not save your signature. Please try again.'); });
+  })).catch(function (err) { text($('sign-error'), Docs.saveErrorMessage(err)); });
 });
 
 /* ---------- delete ---------- */
@@ -391,15 +459,17 @@ function askDelete(id) {
 }
 $('c-cancel').addEventListener('click', function () { $('confirm-overlay').hidden = true; });
 $('c-ok').addEventListener('click', function () {
+  var btn = $('c-ok');
+  if (isBusy(btn)) return;
   var id = deleteId;
   var admin = isAdmin();
   var problem = '';
-  Docs.mutate(t, function (recs) {
+  withDots(btn, Docs.mutate(t, function (recs) {
     if (!admin && Docs.hasSigs(recs, id)) { problem = 'Only the document admin can delete a document that has signatures.'; return null; }
     return recs.filter(function (r) { return !((r[0] === 'd' && r[1] === id) || (r[0] === 's' && r[1] === id)); });
   }).then(function (s) {
     $('confirm-overlay').hidden = true; refresh(s); toast(problem || 'Deleted');
-  }).catch(function (err) { $('confirm-overlay').hidden = true; toast(err.message || 'Could not delete'); });
+  })).catch(function (err) { $('confirm-overlay').hidden = true; toast(Docs.saveErrorMessage(err)); });
 });
 
 /* ---------- search / keys ---------- */
@@ -445,7 +515,7 @@ function bannerEl(b) {
   }
   var ack = el('button', 'ghost', 'Acknowledge');
   ack.type = 'button';
-  ack.addEventListener('click', function () { acknowledge(b.id); });
+  ack.addEventListener('click', function () { acknowledge(b.id, null, ack); });
   acts.appendChild(ack);
   box.appendChild(acts);
   return box;
@@ -478,13 +548,14 @@ $('bp-ack').addEventListener('click', function () {
     popIndex += 1;
     if (popIndex < popQueue.length) showPop();
     else closePop();
-  });
+  }, $('bp-ack'));
 });
 
-function acknowledge(id, then) {
+function acknowledge(id, then, btn) {
   if (!guardWrite() || !me) return;
+  if (isBusy(btn)) return;
   var problem = '';
-  Docs.mutate(t, function (recs) {
+  withDots(btn, Docs.mutate(t, function (recs) {
     if (Docs.findAck(recs, id, me.id)) return recs;
     recs.push(Docs.ackRecord(id, me));
     return recs;
@@ -492,7 +563,7 @@ function acknowledge(id, then) {
     refresh(s);
     toast(problem || 'Acknowledged');
     if (then) then();
-  }).catch(function (err) { toast(err.message || 'Could not save'); });
+  })).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
 }
 
 function openBullForm(id) {
@@ -500,7 +571,7 @@ function openBullForm(id) {
   bulletinEditId = id || null;
   var b = null;
   if (id) Docs.bulletinsOf(state.records).forEach(function (x) { if (x.id === id) b = x; });
-  text($('bull-form-title'), b ? 'Edit bulletin' : 'Post bulletin');
+  text($('bull-form-title'), b ? 'Edit announcement' : 'Post announcement');
   $('b-title').value = b ? b.title : '';
   $('b-msg').value = b ? b.message : '';
   $('b-url').value = b ? b.url : '';
@@ -514,6 +585,8 @@ $('btn-bulletin').addEventListener('click', function () { if (guardWrite()) open
 $('b-cancel').addEventListener('click', closeBullForm);
 $('bull-form').addEventListener('submit', function (e) {
   e.preventDefault();
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
   if (!guardWrite() || !isAdmin()) return;
   var title = $('b-title').value.trim();
   if (!title) { text($('bull-form-error'), 'Please enter a title.'); return; }
@@ -527,54 +600,103 @@ $('bull-form').addEventListener('submit', function (e) {
     url = u.url;
   }
   var id = bulletinEditId;
-  Docs.mutate(t, function (recs) {
+  withDots(btn, Docs.mutate(t, function (recs) {
     if (id) {
       var at = -1;
       recs.forEach(function (r, k) { if (r[0] === 'b' && r[1] === id) at = k; });
       if (at < 0) return null;
-      recs[at] = Docs.bulletinRecord({ id: id, title: title, message: message, url: url, date: recs[at][5], active: recs[at][6] });
+      recs[at] = Docs.bulletinRecord({
+        id: id, title: title, message: message, url: url,
+        date: recs[at][5], active: recs[at][6],
+        authorId: recs[at][7], authorName: recs[at][8], created: recs[at][9]
+      });
     } else {
-      recs.push(Docs.bulletinRecord({ title: title, message: message, url: url, active: 1 }));
+      recs.push(Docs.bulletinRecord({
+        title: title, message: message, url: url, active: 1,
+        authorId: me && me.id, authorName: me && me.name
+      }));
     }
     return recs;
   }).then(function (s) {
-    closeBullForm(); skipPop = false; popShown = false; refresh(s); toast(id ? 'Saved' : 'Bulletin posted');
-  }).catch(function (err) { text($('bull-form-error'), err.message || 'Could not save.'); });
+    closeBullForm(); skipPop = false; popShown = false; refresh(s); toast(id ? 'Saved' : 'Announcement posted');
+  })).catch(function (err) { text($('bull-form-error'), Docs.saveErrorMessage(err)); });
 });
 
-function endBulletin(id) {
+function endBulletin(id, btn) {
   if (!isAdmin() || !guardWrite()) return;
-  Docs.mutate(t, function (recs) {
+  if (isBusy(btn)) return;
+  withDots(btn, Docs.mutate(t, function (recs) {
     recs.forEach(function (r, k) {
-      if (r[0] === 'b' && r[1] === id) recs[k] = Docs.bulletinRecord({ id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: 0 });
+      if (r[0] === 'b' && r[1] === id) recs[k] = Docs.bulletinRecord({
+        id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: 0,
+        authorId: r[7], authorName: r[8], created: r[9]
+      });
     });
     return recs;
-  }).then(function (s) { refresh(s); renderSettings(); toast('Bulletin ended'); })
-    .catch(function (err) { toast(err.message || 'Could not end bulletin'); });
+  }).then(function (s) { refresh(s); toast('Announcement ended'); })
+    ).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
 }
 
-function renderBulletinAdmin() {
-  var card = $('bulletin-admin-card');
-  var wrap = $('bulletin-admin');
-  if (!card || !wrap) return;
-  if (!isAdmin()) { card.hidden = true; return; }
-  card.hidden = false;
+function renderAnnouncements() {
+  var wrap = $('announcements-list');
+  var badge = $('ann-nav-count');
+  if ($('btn-bulletin')) $('btn-bulletin').hidden = !isAdmin();
+  var unacked = me ? Docs.unackedBulletins(state.records, me.id) : [];
+  if (badge) {
+    if (unacked.length) { text(badge, String(unacked.length)); badge.hidden = false; }
+    else { badge.hidden = true; }
+  }
+  if (!wrap) return;
   wrap.textContent = '';
   var list = Docs.bulletinsOf(state.records, false);
-  if (!list.length) { wrap.appendChild(el('p', 'muted', 'No bulletins yet. Click “+ Post bulletin” to post one.')); return; }
-  list.forEach(function (b) {
-    var box = el('div', 'admin-bull' + (b.active ? '' : ' ended'));
-    var title = el('h3', null, b.title + (b.active ? '' : ' (ended)'));
-    box.appendChild(title);
-    if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
-    if (b.url) {
-      var a = el('a', null, 'Click here');
-      a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-      box.appendChild(a);
-    }
-    box.appendChild(el('div', 'e-meta', 'Posted ' + fmtDate(b.date)));
-    var acks = Docs.acksOf(state.records, b.id);
+  if (!list.length) {
+    var empty = el('div', 'empty');
+    empty.appendChild(el('strong', null, 'No announcements yet'));
+    empty.appendChild(document.createTextNode(isAdmin() ? 'Click “+ Post announcement” to post the first one. It will pop up for everyone on the board until they acknowledge it.' : 'When the office posts an announcement, it will show up here.'));
+    wrap.appendChild(empty);
+    return;
+  }
+  list.forEach(function (b) { wrap.appendChild(announcementEl(b)); });
+}
+
+function announcementEl(b) {
+  var acked = me ? Docs.findAck(state.records, b.id, me.id) : null;
+  var box = el('div', 'ann-card' + (b.active ? '' : ' ended') + (b.active && me && !acked ? ' needs-ack' : ''));
+  var top = el('div', 'ann-top');
+  top.appendChild(el('p', 'bb-kicker', b.active ? 'Office Bulletin' : 'Ended'));
+  box.appendChild(top);
+  box.appendChild(el('h3', null, b.title));
+  if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
+  var meta = el('p', 'e-meta');
+  var when = b.created ? fmtStamp(b.created) : fmtDate(b.date);
+  var who = b.authorName || '';
+  meta.textContent = who ? (when + ' · ' + who) : when;
+  box.appendChild(meta);
+  var acts = el('div', 'bb-actions');
+  if (b.url) {
+    var a = el('a', 'primary', 'Click here');
+    a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    acts.appendChild(a);
+  }
+  if (b.active && me && !acked) {
+    var ack = el('button', 'ghost', 'Acknowledge');
+    ack.type = 'button';
+    ack.addEventListener('click', function () { acknowledge(b.id, null, ack); });
+    acts.appendChild(ack);
+  } else if (acked && !isAdmin()) {
+    box.appendChild(el('p', 'ann-acked', 'You acknowledged on ' + fmtStampTime(acked.at)));
+  }
+  if (isAdmin() && b.active) {
+    var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
+    ed.addEventListener('click', function () { openBullForm(b.id); });
+    var en = el('button', 'danger', 'End'); en.type = 'button';
+    en.addEventListener('click', function () { endBulletin(b.id, en); });
+    acts.appendChild(ed); acts.appendChild(en);
+  }
+  if (acts.childNodes.length) box.appendChild(acts);
+  if (isAdmin()) {
     var ad = el('div', 'acks');
+    var acks = Docs.acksOf(state.records, b.id);
     ad.appendChild(el('h4', null, 'Acknowledged by'));
     if (!acks.length) ad.appendChild(el('div', 'none', 'No one has acknowledged this yet.'));
     else {
@@ -590,24 +712,34 @@ function renderBulletinAdmin() {
       ad.appendChild(el('div', pending.length ? 'none' : null, pending.length ? pending.join(', ') : 'Everyone on the board has acknowledged this.'));
     }
     box.appendChild(ad);
-    if (b.active) {
-      var acts = el('div', 'bb-actions');
-      var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
-      ed.addEventListener('click', function () { openBullForm(b.id); });
-      var en = el('button', 'danger', 'End bulletin'); en.type = 'button';
-      en.addEventListener('click', function () { endBulletin(b.id); });
-      acts.appendChild(ed); acts.appendChild(en);
-      box.appendChild(acts);
-    }
-    wrap.appendChild(box);
-  });
+  }
+  return box;
 }
+
+
+$('cloud-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  text($('cloud-error'), '');
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  withDots(btn, store.setLink($('cloud-url').value).then(function () {
+    return store.load();
+  }).then(function (s) {
+    state = s;
+    renderAll();
+    renderSettings();
+    if (store.mode() === 'google') { $('cloud-url').value = ''; toast('Moved to Google'); }
+    else if (store.error()) text($('cloud-error'), Docs.saveErrorMessage(store.error()));
+  }).catch(function (err) {
+    text($('cloud-error'), Docs.saveErrorMessage(err));
+  }));
+});
 
 /* ---------- start ---------- */
 t.render(function () {
   canWrite = typeof t.memberCanWriteToModel === 'function' ? t.memberCanWriteToModel('board') : true;
   renderChips();
-  return Promise.all([Docs.load(t), Docs.whoAmI(t)]).then(function (res) {
+  return Promise.all([store.load(), Docs.whoAmI(t)]).then(function (res) {
     state = res[0]; me = res[1];
     text($('ver'), Docs.ASSET_VERSION);
     var first = Promise.resolve();
@@ -619,9 +751,13 @@ t.render(function () {
     return first;
   }).then(function () {
     if (me) Docs.rememberOpen(t, state.records, me.id);
-    renderList();
-    if (isAdmin()) return Docs.boardMembers(t).then(function (m) { members = m; renderList(); });
-  }).catch(function () {
-    showBanner('Could not load documents. Close and reopen this window.');
+    renderAll();
+    hideLoader();
+    if (isAdmin()) return Docs.boardMembers(t).then(function (m) { members = m; renderAll(); });
+  }).catch(function (err) {
+    hideLoader();
+    showBanner(err && err.cloud ? Docs.saveErrorMessage(err) : 'Could not load documents. Close and reopen this window.');
+    var ban = $('banner');
+    if (ban) { ban.className = 'banner is-full'; ban.hidden = false; }
   });
 });
