@@ -705,7 +705,22 @@ function refresh() {
     }
   }).then(function () {
     kickPaint();
+    hideLoader();
+  }, function (e) {
+    hideLoader();
+    throw e;
   });
+}
+
+// Fade out the inline loading screen once the first load has rendered (or failed).
+function hideLoader() {
+  var loader = document.getElementById('app-loader');
+  if (!loader || loader.classList.contains('is-done')) return;
+  loader.classList.add('is-done');
+  setTimeout(function () {
+    if (loader.parentNode) loader.parentNode.removeChild(loader);
+    kickPaint();
+  }, 400);
 }
 
 function deleteExpense(item) {

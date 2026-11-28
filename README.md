@@ -8,13 +8,13 @@ Everything below can be done in a web browser, on a computer. Plan on about 10 m
 
 ---
 
-## Google storage (version 20261128b)
+## Google storage (version 20261128c)
 
 Office Budget now keeps the budget in Google, inside the **Office Budget Email** Apps Script, instead of on Trello storage cards.
 
 1. Paste the new script code (`Office-Budget-Email-v2-GoogleStorage.txt`) over the old code in the Apps Script editor and save.
 2. Choose **Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy**. Keep the same deployment so the link stays the same. Authorize if asked.
-3. Upload these files to GitHub, then set the Trello connector URL to end with `?v=20261128b`.
+3. Upload these files to GitHub, then set the Trello connector URL to end with `?v=20261128c`.
 4. Open Office Budget once. It copies the Trello budget to Google, checks the copy, and from then on uses Google. Nothing to click.
 
 Settings shows "Your budget is stored in Google." The Trello copy (board data and Budget Storage cards) is left alone as a backup. Don't delete those cards yet.
@@ -31,7 +31,7 @@ If Google can't be reached, a red message appears and nothing is lost or overwri
 
 **If you already uploaded an earlier copy of Budget Sync to GitHub**, upload these new files over the old ones (replace them). You can delete leftover files from the old card version (`expense.html`, `section.html`, `report.html`, and the `settings` folder) if they are still in the repository. After GitHub Pages updates (often a minute or two), skip to Part 3, step 6 and make sure only **board-buttons** is turned on. Then go back to the Callahan Office board and refresh the page (or close and reopen the Office Budget window) so Trello loads the new files.
 
-The files include a version tag (`?v=20261128b`) on the scripts and styles so an older cached copy is less likely to stick. If you upload another update later and still see the old version, change that date in `index.html`, `budget.html`, and `js/budget.js` (look for `20261128b` or `ASSET_VERSION`) to today’s date and upload those files again.
+The files include a version tag (`?v=20261128c`) on the scripts and styles so an older cached copy is less likely to stick. If you upload another update later and still see the old version, change that date in `index.html`, `budget.html`, and `js/budget.js` (look for `20261128c` or `ASSET_VERSION`) to today’s date and upload those files again.
 
 **Important:** If you already created a Trello app called Budget Sync and chose “My app doesn’t use Power-up capabilities,” that one cannot be changed. You will create a **new** app below and pick the option that **does** use Power-Up capabilities.
 
@@ -122,7 +122,7 @@ Anyone on the board, including Amy-Rose, can use it once it is added. They do no
 - To log spending, fill in the form on **Overview** or **Expenses** (date, amount, description, and a category) and click **Save expense**. If a purchase does not fit a planned category, choose **Other / Unplanned**. The person who adds an expense is filled in automatically from their Trello name.
 - To change or delete an expense, use **Edit** or **Delete** in the list. Edit fills the form; it does not open a second window.
 - The **Categories** page is a simple, read-only look at where logged expenses went. Planning and progress live on the **Budget** page.
-- To change the $25,000 biennium budget or the already-spent amount from a new state report, open **Settings**. The bottom of that page also shows the version that is running (for example `v20261128b`). If the office category list is missing or incomplete, use **Restore office categories**. Existing categories are kept and not duplicated.
+- To change the $25,000 biennium budget or the already-spent amount from a new state report, open **Settings**. The bottom of that page also shows the version that is running (for example `v20261128c`). If the office category list is missing or incomplete, use **Restore office categories**. Existing categories are kept and not duplicated.
 - To get a monthly summary by email, open **Settings** and use **Monthly update**. The steps are under “Monthly update by email” below.
 - If you spend more than the biennium budget, the left number turns red and the window shows **Overspent**.
 - After you reconcile with a new state report, click **Archive / roll up**. That folds all logged expenses into the already-spent amount and clears the list, so the totals stay the same and you have room to keep logging. You will be asked to confirm first.
@@ -137,7 +137,7 @@ Anyone on the board, including Amy-Rose, can use it once it is added. They do no
 - **Trello says the connector URL is invalid.** You pasted the GitHub *repository* page (`github.com/...`) instead of the Pages address (`https://YOUR-USERNAME.github.io/trello-budget-powerup/`).
 - **I do not see Budget Sync on the board.** Make sure you created a new app that **does** use Power-Up capabilities, in the Callahan Office workspace, and that **board-buttons** in Part 3 is turned on.
 - **I do not see numbers on a card.** That is expected. Nothing appears on cards. Click **Office Budget** in the board header.
-- **I uploaded new files but Trello still shows the old Office Budget window (for example, no Budget page).** GitHub Pages can take a minute or two to update. Then refresh the Trello board, or close the Office Budget window and open it again. These files use a version tag (`?v=20261128b`) so the browser is less likely to keep an old copy. If it is still stuck after that, change `20261128b` to today’s date in `index.html`, `budget.html`, and `js/budget.js`, upload those files again, wait for Pages, and refresh Trello.
+- **I uploaded new files but Trello still shows the old Office Budget window (for example, no Budget page).** GitHub Pages can take a minute or two to update. Then refresh the Trello board, or close the Office Budget window and open it again. These files use a version tag (`?v=20261128c`) so the browser is less likely to keep an old copy. If it is still stuck after that, change `20261128c` to today’s date in `index.html`, `budget.html`, and `js/budget.js`, upload those files again, wait for Pages, and refresh Trello.
 - **The Office Budget button icon did not change.** Trello sometimes caches that header icon. Refresh the board, or try again after a few minutes. The new icon is a simple dollar-in-circle mark.
 - **It asks me to add a Budget Storage card.** On the Callahan Office board, click **Add a card** in any list and name it exactly **Budget Storage 1 – Don't delete (budget data)**. Reopen Office Budget. After it finds the card, you can archive it (open the card → Archive) so it is not sitting on the board. Do not delete it. If you already archived it and expenses look missing, go to the board menu → **Archived items**, send that card back to the board, and reopen Office Budget.
 - **I still have the old Google Sheet.** You can leave it or delete it. This Power-Up does not use it.
