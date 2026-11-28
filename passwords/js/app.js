@@ -45,6 +45,45 @@ function resize() {
   if (typeof t.sizeTo === 'function') t.sizeTo(document.body).catch(function () { return null; });
 }
 
+/* ---------- saving dots ----------
+ * While a save is on its way to Google, the clicked button shows three small
+ * animated dots, keeps its size, and is disabled so it cannot be pressed twice.
+ * The label comes back when the save finishes or fails (errors show as before).
+ */
+function submitBtn(event) {
+  var form = event && event.target;
+  return (event && event.submitter) || (form && form.querySelector ? form.querySelector('button[type="submit"]') : null);
+}
+
+function isBusy(btn) {
+  return !!(btn && btn.getAttribute('data-busy') === '1');
+}
+
+function withDots(btn, promise) {
+  if (!btn) return promise;
+  var label = btn.innerHTML;
+  var wasDisabled = btn.disabled;
+  var box = btn.getBoundingClientRect();
+  btn.setAttribute('data-busy', '1');
+  btn.setAttribute('aria-busy', 'true');
+  if (box.width) btn.style.width = box.width + 'px';
+  if (box.height) btn.style.height = box.height + 'px';
+  btn.classList.add('is-saving');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="saving-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="sr-only">Saving…</span>';
+  function done() {
+    btn.innerHTML = label;
+    btn.style.width = '';
+    btn.style.height = '';
+    btn.classList.remove('is-saving');
+    btn.removeAttribute('aria-busy');
+    btn.removeAttribute('data-busy');
+    btn.disabled = wasDisabled;
+    if (typeof afterSaveButton === 'function') afterSaveButton(btn);
+  }
+  return Promise.resolve(promise).then(function (v) { done(); return v; }, function (e) { done(); throw e; });
+}
+
 /* ---------- navigation ---------- */
 function showSection(name) {
   document.querySelectorAll('.nav-btn[data-section]').forEach(function (b) {
@@ -145,7 +184,9 @@ function renderCloud(cap) {
 $('cloud-form').addEventListener('submit', function (e) {
   e.preventDefault();
   text($('cloud-error'), '');
-  store.setLink($('cloud-url').value).then(function () {
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  withDots(btn, store.setLink($('cloud-url').value).then(function () {
     return store.load();
   }).then(function (d) {
     data = d;
@@ -155,7 +196,7 @@ $('cloud-form').addEventListener('submit', function (e) {
     else if (store.error()) text($('cloud-error'), Vault.saveErrorMessage(store.error()));
   }).catch(function (err) {
     text($('cloud-error'), Vault.saveErrorMessage(err));
-  });
+  }));
 });
 
 /* ---------- logins list ---------- */
@@ -284,7 +325,9 @@ $('login-form').addEventListener('submit', function (e) {
   if (!row[0]) { text($('form-error'), 'Please enter a name.'); return; }
   var idx = editIndex;
   var snapshot = idx >= 0 ? data[idx] : null;
-  mutate(function (fresh) {
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  withDots(btn, mutate(function (fresh) {
     if (idx >= 0) {
       // find by original content in case someone else added/removed entries meanwhile
       var at = -1;
@@ -297,7 +340,7 @@ $('login-form').addEventListener('submit', function (e) {
   }).then(function () {
     revealed = {};
     closeForm(); renderList(); toast('Saved');
-  }).catch(function (err) { text($('form-error'), err.message || 'Could not save. Please try again.'); });
+  }).catch(function (err) { text($('form-error'), err.message || 'Could not save. Please try again.'); }));
 });
 
 /* ---------- delete with confirmation ---------- */
@@ -310,14 +353,16 @@ $('c-cancel').addEventListener('click', function () { $('confirm-overlay').hidde
 $('c-ok').addEventListener('click', function () {
   var snap = data[deleteIndex];
   if (!snap) { $('confirm-overlay').hidden = true; return; }
-  mutate(function (fresh) {
+  var btn = $('c-ok');
+  if (isBusy(btn)) return;
+  withDots(btn, mutate(function (fresh) {
     var at = -1;
     fresh.forEach(function (r, k) { if (at < 0 && r.join('\u0001') === snap.join('\u0001')) at = k; });
     if (at < 0) return null;
     fresh.splice(at, 1);
   }).then(function () {
     revealed = {}; $('confirm-overlay').hidden = true; renderList(); toast('Deleted');
-  }).catch(function (err) { $('confirm-overlay').hidden = true; toast(err.message || 'Could not delete'); });
+  }).catch(function (err) { $('confirm-overlay').hidden = true; toast(err.message || 'Could not delete'); }));
 });
 
 /* ---------- search / filter / keys ---------- */

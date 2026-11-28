@@ -31,7 +31,7 @@
   var KEY = 'p';
   var LIMIT = 4096;
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128b';
+  var ASSET_VERSION = '20261128c';
   var MAX = { name: 40, url: 80, user: 60, pass: 64, desc: 500 };
   var STORAGE_NAME_RE = /^\s*password storage(?:\s+(\d+))?(?:\b.*)?$/i;
 
