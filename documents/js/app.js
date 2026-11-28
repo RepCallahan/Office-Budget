@@ -15,6 +15,8 @@ var catFilter = '';
 var editId = null;     // id of document being edited, or null when adding
 var signId = null;     // id of document being signed
 var deleteId = null;
+var confirmKind = 'doc'; // 'doc' | 'ann'
+var viewId = null;     // id of document open in the in-app viewer
 var toastTimer = null;
 
 function $(id) { return document.getElementById(id); }
@@ -114,6 +116,7 @@ var TRASH = 'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13';
 
 /* ---------- navigation ---------- */
 function showSection(name) {
+  closeViewer();
   document.querySelectorAll('.nav-btn').forEach(function (b) {
     var on = b.getAttribute('data-section') === name;
     b.classList.toggle('is-active', on);
@@ -128,6 +131,58 @@ function showSection(name) {
 document.querySelectorAll('.nav-btn').forEach(function (b) {
   b.addEventListener('click', function () { showSection(b.getAttribute('data-section')); });
 });
+
+/* ---------- in-app document viewer ---------- */
+function fillViewerSign(d) {
+  var slot = $('viewer-sign');
+  if (!slot) return;
+  slot.textContent = '';
+  if (!d || !d.sign) return;
+  if (!me) {
+    slot.appendChild(el('span', 'need', 'Cannot tell who you are in Trello, so signing is off.'));
+    return;
+  }
+  var mine = Docs.findSig(state.records, d.id, me.id, d.version);
+  if (mine) {
+    slot.appendChild(el('span', 'signed-note', '✓ You signed on ' + fmtStampTime(mine.at)));
+    return;
+  }
+  slot.appendChild(el('span', 'need', 'Signature needed'));
+  var sb = el('button', 'ghost sign-btn', 'Sign');
+  sb.type = 'button';
+  sb.addEventListener('click', function () { openSign(d.id); });
+  slot.appendChild(sb);
+}
+
+function openViewer(d) {
+  if (!d) return;
+  var preview = Docs.previewUrl(d.url);
+  if (!preview) {
+    window.open(d.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  viewId = d.id;
+  text($('viewer-title'), d.title);
+  $('viewer-frame').title = d.title;
+  $('viewer-frame').src = preview;
+  var ext = $('viewer-external');
+  ext.href = d.url;
+  fillViewerSign(d);
+  $('doc-viewer').hidden = false;
+  $('main').classList.add('is-viewing');
+  if (typeof t.sizeTo === 'function') { try { t.sizeTo('#app'); } catch (e) {} }
+}
+
+function closeViewer() {
+  if (!viewId && $('doc-viewer') && $('doc-viewer').hidden) return;
+  viewId = null;
+  var frame = $('viewer-frame');
+  if (frame) frame.src = 'about:blank';
+  if ($('doc-viewer')) $('doc-viewer').hidden = true;
+  if ($('main')) $('main').classList.remove('is-viewing');
+}
+
+$('viewer-back').addEventListener('click', function () { closeViewer(); });
 
 /* ---------- list ---------- */
 function renderChips() {
@@ -215,6 +270,9 @@ function entry(d) {
   }
   var open = el('a', 'primary big', 'Open');
   open.href = d.url; open.target = '_blank'; open.rel = 'noopener noreferrer';
+  open.addEventListener('click', function (e) {
+    if (Docs.previewUrl(d.url)) { e.preventDefault(); openViewer(d); }
+  });
   btns.appendChild(open);
   side.appendChild(btns);
   if (d.sign && me) {
@@ -330,7 +388,16 @@ function guardWrite() {
   if (!canWrite) { toast('You do not have permission to change this board.'); return false; }
   return true;
 }
-function refresh(s) { state = s; renderAll(); }
+function refresh(s) {
+  state = s;
+  renderAll();
+  if (viewId) {
+    var d = null;
+    Docs.docsOf(state.records).forEach(function (x) { if (x.id === viewId) d = x; });
+    if (d) fillViewerSign(d);
+    else closeViewer();
+  }
+}
 function renderAll() { renderList(); renderAnnouncements(); }
 
 /* ---------- add / edit ---------- */
@@ -453,22 +520,41 @@ function askDelete(id) {
     toast('Only the document admin can delete a document that has signatures.');
     return;
   }
+  confirmKind = 'doc';
   deleteId = id;
+  text($('confirm-title'), 'Delete this document?');
   text($('confirm-text'), '“' + d.title + '” will be removed for everyone on this board' + (Docs.hasSigs(state.records, id) ? ', along with all of its signatures and signature history' : '') + '. The file in Google Drive is not touched. This cannot be undone.');
   $('confirm-overlay').hidden = false;
 }
-$('c-cancel').addEventListener('click', function () { $('confirm-overlay').hidden = true; });
+
+function askDeleteAnnouncement(id) {
+  if (!isAdmin() || !guardWrite()) return;
+  var b = null;
+  Docs.bulletinsOf(state.records, false).forEach(function (x) { if (x.id === id) b = x; });
+  if (!b) return;
+  confirmKind = 'ann';
+  deleteId = id;
+  text($('confirm-title'), 'Delete this announcement?');
+  text($('confirm-text'), '“' + b.title + '” will be removed for everyone on this board, along with who has acknowledged it' + (b.active ? '. It will also stop popping up' : '') + '. This cannot be undone.');
+  $('confirm-overlay').hidden = false;
+}
+$('c-cancel').addEventListener('click', function () { $('confirm-overlay').hidden = true; deleteId = null; });
 $('c-ok').addEventListener('click', function () {
   var btn = $('c-ok');
   if (isBusy(btn)) return;
   var id = deleteId;
+  var kind = confirmKind;
   var admin = isAdmin();
   var problem = '';
   withDots(btn, Docs.mutate(t, function (recs) {
+    if (kind === 'ann') {
+      if (!admin) { problem = 'Only the admin can delete an announcement.'; return null; }
+      return Docs.removeAnnouncement(recs, id);
+    }
     if (!admin && Docs.hasSigs(recs, id)) { problem = 'Only the document admin can delete a document that has signatures.'; return null; }
     return recs.filter(function (r) { return !((r[0] === 'd' && r[1] === id) || (r[0] === 's' && r[1] === id)); });
   }).then(function (s) {
-    $('confirm-overlay').hidden = true; refresh(s); toast(problem || 'Deleted');
+    $('confirm-overlay').hidden = true; deleteId = null; refresh(s); toast(problem || 'Deleted');
   })).catch(function (err) { $('confirm-overlay').hidden = true; toast(Docs.saveErrorMessage(err)); });
 });
 
@@ -481,6 +567,7 @@ document.addEventListener('keydown', function (e) {
   else if (!$('bulletin-overlay').hidden) $('bp-later').click();
   else if (!$('sign-overlay').hidden) closeSign();
   else if (!$('form-overlay').hidden) closeForm();
+  else if (viewId) closeViewer();
 });
 
 
@@ -686,12 +773,17 @@ function announcementEl(b) {
   } else if (acked && !isAdmin()) {
     box.appendChild(el('p', 'ann-acked', 'You acknowledged on ' + fmtStampTime(acked.at)));
   }
-  if (isAdmin() && b.active) {
-    var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
-    ed.addEventListener('click', function () { openBullForm(b.id); });
-    var en = el('button', 'danger', 'End'); en.type = 'button';
-    en.addEventListener('click', function () { endBulletin(b.id, en); });
-    acts.appendChild(ed); acts.appendChild(en);
+  if (isAdmin()) {
+    if (b.active) {
+      var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
+      ed.addEventListener('click', function () { openBullForm(b.id); });
+      var en = el('button', 'danger', 'End'); en.type = 'button';
+      en.addEventListener('click', function () { endBulletin(b.id, en); });
+      acts.appendChild(ed); acts.appendChild(en);
+    }
+    var del = el('button', 'danger', 'Delete'); del.type = 'button';
+    del.addEventListener('click', function () { askDeleteAnnouncement(b.id); });
+    acts.appendChild(del);
   }
   if (acts.childNodes.length) box.appendChild(acts);
   if (isAdmin()) {
@@ -752,6 +844,7 @@ t.render(function () {
   }).then(function () {
     if (me) Docs.rememberOpen(t, state.records, me.id);
     renderAll();
+    showSection(Docs.requestedSection());
     hideLoader();
     if (isAdmin()) return Docs.boardMembers(t).then(function (m) { members = m; renderAll(); });
   }).catch(function (err) {

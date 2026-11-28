@@ -29,7 +29,7 @@
   var LIMIT = 4096;          // Trello's per-scope cap
   var CAP = 3900;            // what we allow ourselves (leaves headroom for Trello's wrapper)
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128d';
+  var ASSET_VERSION = '20261128e';
   var MAX = { title: 80, url: 300, desc: 140, name: 60, message: 400 };
   var MAX_FULL_ANNOUNCEMENTS = 12; // newest + all still-active keep a full message body
   var TRIMMED_MESSAGE = 80;        // older ended announcements are shortened to this
@@ -146,6 +146,25 @@
     if (/\s/.test(u)) return { error: 'The link cannot contain spaces.' };
     if (u.length > MAX.url) return { error: 'That link is too long.' };
     return { url: u };
+  }
+
+  /**
+   * Convert a Google Drive / Docs / Sheets / Slides link to an embeddable
+   * /preview URL. Returns null for anything else (open in a new tab).
+   */
+  function previewUrl(raw) {
+    var u = String(raw || '').trim();
+    if (!/^https:\/\//i.test(u)) return null;
+    var rk = '';
+    var rm = u.match(/[?&]resourcekey=([^&#]+)/i);
+    if (rm) rk = '?resourcekey=' + rm[1];
+    var m = u.match(/^https:\/\/(?:www\.)?docs\.google\.com\/(document|spreadsheets|presentation)(?:\/u\/\d+)?\/d\/([a-zA-Z0-9_-]+)/i);
+    if (m) return 'https://docs.google.com/' + m[1].toLowerCase() + '/d/' + m[2] + '/preview' + rk;
+    m = u.match(/^https:\/\/(?:www\.)?drive\.google\.com\/(?:drive\/u\/\d+\/)?file\/d\/([a-zA-Z0-9_-]+)/i);
+    if (m) return 'https://drive.google.com/file/d/' + m[1] + '/preview' + rk;
+    m = u.match(/^https:\/\/(?:www\.)?(?:drive|docs)\.google\.com\/(?:open|uc)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
+    if (m) return 'https://drive.google.com/file/d/' + m[1] + '/preview' + rk;
+    return null;
   }
 
   /* ---------- admin ---------- */
@@ -396,6 +415,26 @@
     return bulletinsOf(records, true).filter(function (b) {
       return !memberId || !findAck(records, b.id, memberId);
     });
+  }
+  /** Remove an announcement and all of its acknowledgements. */
+  function removeAnnouncement(records, id) {
+    return (records || []).filter(function (r) {
+      return !((r[0] === 'b' && r[1] === id) || (r[0] === 'k' && r[1] === id));
+    });
+  }
+  function requestedSection(search) {
+    try {
+      var q = String(search == null && typeof location !== 'undefined' ? location.search : search || '');
+      var m = q.replace(/^\?/, '').split('&');
+      for (var i = 0; i < m.length; i++) {
+        var parts = m[i].split('=');
+        if (decodeURIComponent(parts[0] || '') === 'section') {
+          var v = decodeURIComponent(parts[1] || '');
+          if (v === 'announcements' || v === 'docs' || v === 'settings') return v;
+        }
+      }
+    } catch (e) {}
+    return 'announcements';
   }
 
   /* ---------- board alerts (connector) ---------- */
@@ -814,9 +853,10 @@
     docRecord: docRecord, sigRecord: sigRecord, docsOf: docsOf, sigsOf: sigsOf, findSig: findSig, hasSigs: hasSigs,
     bulletinRecord: bulletinRecord, ackRecord: ackRecord, bulletinsOf: bulletinsOf, acksOf: acksOf,
     findAck: findAck, unackedBulletins: unackedBulletins,
+    removeAnnouncement: removeAnnouncement, requestedSection: requestedSection,
     trimAnnouncementHistory: trimAnnouncementHistory,
     MAX_FULL_ANNOUNCEMENTS: MAX_FULL_ANNOUNCEMENTS, TRIMMED_MESSAGE: TRIMMED_MESSAGE, nowStamp: nowStamp,
-    cleanRecords: cleanRecords, normalizeUrl: normalizeUrl,
+    cleanRecords: cleanRecords, normalizeUrl: normalizeUrl, previewUrl: previewUrl,
     nameMatchesAdmin: nameMatchesAdmin, isAdmin: isAdmin,
     plan: plan, capacity: capacity, load: load, save: save, mutate: mutate,
     loadTrello: loadTrello, saveTrello: saveTrello,
