@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Office Budget</title>
-    <link rel="stylesheet" href="./css/app.css?v=20261124e">
-    <link rel="stylesheet" href="./css/report.css?v=20261124e">
+    <link rel="stylesheet" href="./css/app.css?v=20261127b">
+    <link rel="stylesheet" href="./css/report.css?v=20261127b">
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
   </head>
   <body>
@@ -34,7 +34,7 @@
       <div id="view-budget" class="view" hidden>
         <aside class="sidebar" aria-label="Budget sections">
           <div class="sidebar-brand">
-            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261124e" width="192" height="200" alt="Wisconsin state seal">
+            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261127b" width="192" height="200" alt="Wisconsin state seal">
             <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Budget</span>
           </div>
           <nav class="sidebar-nav">
@@ -287,7 +287,7 @@
               </form>
               <div class="more-divider"></div>
               <h3 class="subhead">Monthly update</h3>
-              <p class="hint">Once a month, send a snapshot of this budget to a Google Sheet through an Apps Script web app. Paste the web app URL (it should look like https://script.google.com/macros/s/…/exec). The first time you open Office Budget in a new month, a snapshot of the previous month is sent automatically.</p>
+              <p class="hint">Once a month, send a snapshot of this budget to an Apps Script web app, which emails you a readable summary. Paste the web app URL (it should look like https://script.google.com/macros/s/…/exec). The first time you open Office Budget in a new month, a snapshot of the previous month is sent automatically.</p>
               <form id="webhook-form">
                 <div class="field">
                   <label for="webhook-url">Webhook URL</label>
@@ -306,10 +306,11 @@
               <button type="button" id="restore-cats-btn" class="ghost-btn">Restore office categories</button>
               <div class="more-divider"></div>
               <h3 class="subhead">Archive</h3>
-              <p class="hint">Fold logged expenses into Already spent and clear the list. Totals stay the same. Use this if Trello’s storage limit is getting full.</p>
+              <p class="hint">Fold logged expenses into Already spent and clear the list. Totals stay the same. Use this if storage is getting full.</p>
               <button type="button" id="rollup-btn" class="ghost-btn">Archive / roll up</button>
               <div class="more-divider"></div>
               <button type="button" id="remove-btn" class="ghost-btn danger">Remove budget from this board</button>
+              <p class="hint" id="storage-help">Expenses are stored on a Trello card named “Budget Storage 1 – Don't delete (budget data)”. Add that card once, then reopen Office Budget. You can archive the card so it stays off the board — just don’t delete it. If one card fills up, add “Budget Storage 2 – Don't delete (budget data)” the same way.</p>
               <p id="storage-line" class="storage"></p>
               <p id="app-version" class="version-line"></p>
             </section>
@@ -319,7 +320,7 @@
 
       </div>
     </div>
-    <script src="./js/budget.js?v=20261124e"></script>
-    <script src="./js/app.js?v=20261124e"></script>
+    <script src="./js/budget.js?v=20261127b"></script>
+    <script src="./js/app.js?v=20261127b"></script>
   </body>
 </html>

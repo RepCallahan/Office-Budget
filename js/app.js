@@ -204,8 +204,13 @@ function renderBanners(budget) {
   if (left < 0) {
     box.appendChild(el('div', { className: 'banner banner-over', text: 'Overspent by ' + BudgetSync.formatMoney(Math.abs(left)) + '.' }));
   }
-  if (info.full) box.appendChild(el('div', { className: 'banner banner-over', text: BudgetSync.fullMessage() }));
+  if (info.needCard) box.appendChild(el('div', { className: 'banner banner-over', text: BudgetSync.needCardMessage(info.nextTitle) }));
+  else if (info.full) box.appendChild(el('div', { className: 'banner banner-over', text: BudgetSync.fullMessage() }));
+  else if (info.needSetup) box.appendChild(el('div', { className: 'banner banner-warn', text: BudgetSync.setupCardMessage() }));
   else if (info.warn) box.appendChild(el('div', { className: 'banner banner-warn', text: BudgetSync.warnMessage(info) }));
+  if (info.missing && info.missing.length) {
+    box.appendChild(el('div', { className: 'banner banner-warn', text: 'A Budget Storage card could not be read. If you archived it, that is okay. If expenses are missing, open Menu → Archived items, send the “Budget Storage” card back to the board, and reopen Office Budget. Do not delete those cards.' }));
+  }
 }
 
 function renderSummary(budget) {
@@ -458,7 +463,7 @@ function deletePlan(row) {
       return refresh();
     });
   }).catch(function (e) {
-    if (e && e.code === 'FULL') window.alert(BudgetSync.fullMessage());
+    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(e));
     else window.alert('Could not delete that category. Please try again.');
   });
 }
@@ -532,12 +537,12 @@ function renderSettings(budget) {
   var info = BudgetSync.storageInfo(budget);
   var storage = document.getElementById('storage-line');
   storage.className = 'storage' + (info.full ? ' is-full' : info.warn ? ' is-warn' : '');
-  text(storage, 'Storage used: ' + info.percent + '% of Trello’s board limit (' + info.used + ' of ' + info.limit + ' characters).');
+  text(storage, BudgetSync.storageLineText(info));
   var ver = document.getElementById('app-version');
   if (ver) text(ver, 'v' + BudgetSync.ASSET_VERSION);
   var restoreBtn = document.getElementById('restore-cats-btn');
   if (restoreBtn) restoreBtn.disabled = !canWrite;
-  if (info.full) document.getElementById('exp-save').disabled = true;
+  if (info.full || info.needCard) document.getElementById('exp-save').disabled = true;
   var urlField = document.getElementById('webhook-url');
   if (urlField && document.activeElement !== urlField) urlField.value = budget.k || '';
   var status = document.getElementById('webhook-status');
@@ -635,7 +640,7 @@ function maybeSeedCategories(budget) {
     return BudgetSync.load(t);
   }).catch(function (err) {
     showAppToast(
-      (err && err.code === 'FULL') ? BudgetSync.fullMessage() : 'Could not save the office categories. Please try again.',
+      (err && (err.code === 'FULL' || err.code === 'NEED_CARD')) ? BudgetSync.saveErrorMessage(err) : 'Could not save the office categories. Please try again.',
       'warn'
     );
     return budget;
@@ -720,8 +725,8 @@ document.getElementById('expense-form').addEventListener('submit', function (eve
     resetExpenseForm();
     return refresh();
   }).catch(function (e) {
-    if (e && (e.code === 'FULL' || (e.message && String(e.message).indexOf('4096') !== -1))) {
-      BudgetSync.showError(err, BudgetSync.fullMessage());
+    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD' || (e.message && String(e.message).indexOf('4096') !== -1))) {
+      BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
       return;
     }
     BudgetSync.showError(err, 'Could not save this expense. Please try again.');
@@ -748,7 +753,7 @@ document.getElementById('settings-form').addEventListener('submit', function (ev
     if (!budget) throw new Error('NO_BUDGET');
     return BudgetSync.save(t, BudgetSync.withMeta(budget, { t: total, s: starting }));
   }).then(refresh).catch(function (e) {
-    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
+    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, 'Could not save settings. Please try again.');
   });
 });
@@ -963,7 +968,7 @@ document.getElementById('plan-form').addEventListener('submit', function (event)
     if (e && e.code === 'DUP') return BudgetSync.showError(err, 'A category with that name already exists.');
     if (e && e.code === 'NAME') return BudgetSync.showError(err, 'Please enter a category name.');
     if (e && e.code === 'AMOUNT') return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
+    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, 'Could not save that category. Please try again.');
   });
 });
@@ -986,7 +991,7 @@ document.getElementById('restore-cats-btn').addEventListener('click', function (
       return refresh();
     });
   }).catch(function (err) {
-    if (err && err.code === 'FULL') window.alert(BudgetSync.fullMessage());
+    if (err && (err.code === 'FULL' || err.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(err));
     else window.alert('Could not restore the office categories. Please try again.');
   });
 });
@@ -1003,7 +1008,7 @@ document.getElementById('webhook-form').addEventListener('submit', function (eve
   }).then(refresh).catch(function (e) {
     if (e && e.code === 'HTTPS') return BudgetSync.showError(err, 'Use an https URL (or localhost for a test).');
     if (e && e.code === 'URL') return BudgetSync.showError(err, 'Enter a valid webhook URL.');
-    if (e && e.code === 'FULL') return BudgetSync.showError(err, BudgetSync.fullMessage());
+    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, 'Could not save the webhook URL. Please try again.');
   });
 });

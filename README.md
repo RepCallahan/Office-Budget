@@ -16,7 +16,7 @@ Everything below can be done in a web browser, on a computer. Plan on about 10 m
 
 **If you already uploaded an earlier copy of Budget Sync to GitHub**, upload these new files over the old ones (replace them). You can delete leftover files from the old card version (`expense.html`, `section.html`, `report.html`, and the `settings` folder) if they are still in the repository. After GitHub Pages updates (often a minute or two), skip to Part 3, step 6 and make sure only **board-buttons** is turned on. Then go back to the Callahan Office board and refresh the page (or close and reopen the Office Budget window) so Trello loads the new files.
 
-The files include a version tag (`?v=20261124e`) on the scripts and styles so an older cached copy is less likely to stick. If you upload another update later and still see the old version, change that date in `index.html`, `budget.html`, and `js/budget.js` (look for `20261124e` or `ASSET_VERSION`) to today’s date and upload those files again.
+The files include a version tag (`?v=20261127b`) on the scripts and styles so an older cached copy is less likely to stick. If you upload another update later and still see the old version, change that date in `index.html`, `budget.html`, and `js/budget.js` (look for `20261127b` or `ASSET_VERSION`) to today’s date and upload those files again.
 
 **Important:** If you already created a Trello app called Budget Sync and chose “My app doesn’t use Power-up capabilities,” that one cannot be changed. You will create a **new** app below and pick the option that **does** use Power-Up capabilities.
 
@@ -107,12 +107,12 @@ Anyone on the board, including Amy-Rose, can use it once it is added. They do no
 - To log spending, fill in the form on **Overview** or **Expenses** (date, amount, description, and a category) and click **Save expense**. If a purchase does not fit a planned category, choose **Other / Unplanned**. The person who adds an expense is filled in automatically from their Trello name.
 - To change or delete an expense, use **Edit** or **Delete** in the list. Edit fills the form; it does not open a second window.
 - The **Categories** page is a simple, read-only look at where logged expenses went. Planning and progress live on the **Budget** page.
-- To change the $25,000 biennium budget or the already-spent amount from a new state report, open **Settings**. The bottom of that page also shows the version that is running (for example `v20261124e`). If the office category list is missing or incomplete, use **Restore office categories**. Existing categories are kept and not duplicated.
-- To send a monthly snapshot to a Google Sheet, open **Settings** and use **Monthly update**. The steps are under “Monthly update to a Google Sheet” below.
+- To change the $25,000 biennium budget or the already-spent amount from a new state report, open **Settings**. The bottom of that page also shows the version that is running (for example `v20261127b`). If the office category list is missing or incomplete, use **Restore office categories**. Existing categories are kept and not duplicated.
+- To get a monthly summary by email, open **Settings** and use **Monthly update**. The steps are under “Monthly update by email” below.
 - If you spend more than the biennium budget, the left number turns red and the window shows **Overspent**.
 - After you reconcile with a new state report, click **Archive / roll up**. That folds all logged expenses into the already-spent amount and clears the list, so the totals stay the same and you have room to keep logging. You will be asked to confirm first.
 - When you are ready to start a new biennium (the next one begins **January 4, 2027**), click **Reset budget**. A printable session report opens first, with the period dates, totals, planned-vs-spent by category, and the full expense list. Click **Print / Save as PDF** and save the file from your browser’s print dialog. Only after that, click **I've saved the report, reset for next session**. That clears all expenses, per-category spent and carried-in amounts, the already-spent total, and unitemized amounts, sets the biennium budget back to $25,000, and records the new period start date. Every category is kept — names, groups, and planned amounts. A reset never deletes categories.
-- Trello only lets a Power-Up store a short amount of data on each board. If the budget is getting full, Budget Sync will warn you. Use **Archive / roll up** to free space.
+- Trello only lets a Power-Up store a short amount of data on each board or card. To hold more expenses, add a card on this board named **Budget Storage 1 – Don't delete (budget data)**, then reopen Office Budget. The app moves logged expenses onto that card automatically. You can archive the card afterward so it stays off the board — just don’t delete it. If that card fills up, add **Budget Storage 2 – Don't delete (budget data)** the same way. Use **Archive / roll up** anytime you want to fold logged expenses into already spent and free space.
 
 ---
 
@@ -122,24 +122,23 @@ Anyone on the board, including Amy-Rose, can use it once it is added. They do no
 - **Trello says the connector URL is invalid.** You pasted the GitHub *repository* page (`github.com/...`) instead of the Pages address (`https://YOUR-USERNAME.github.io/trello-budget-powerup/`).
 - **I do not see Budget Sync on the board.** Make sure you created a new app that **does** use Power-Up capabilities, in the Callahan Office workspace, and that **board-buttons** in Part 3 is turned on.
 - **I do not see numbers on a card.** That is expected. Nothing appears on cards. Click **Office Budget** in the board header.
-- **I uploaded new files but Trello still shows the old Office Budget window (for example, no Budget page).** GitHub Pages can take a minute or two to update. Then refresh the Trello board, or close the Office Budget window and open it again. These files use a version tag (`?v=20261124e`) so the browser is less likely to keep an old copy. If it is still stuck after that, change `20261124e` to today’s date in `index.html`, `budget.html`, and `js/budget.js`, upload those files again, wait for Pages, and refresh Trello.
+- **I uploaded new files but Trello still shows the old Office Budget window (for example, no Budget page).** GitHub Pages can take a minute or two to update. Then refresh the Trello board, or close the Office Budget window and open it again. These files use a version tag (`?v=20261127b`) so the browser is less likely to keep an old copy. If it is still stuck after that, change `20261127b` to today’s date in `index.html`, `budget.html`, and `js/budget.js`, upload those files again, wait for Pages, and refresh Trello.
 - **The Office Budget button icon did not change.** Trello sometimes caches that header icon. Refresh the board, or try again after a few minutes. The new icon is a simple dollar-in-circle mark.
+- **It asks me to add a Budget Storage card.** On the Callahan Office board, click **Add a card** in any list and name it exactly **Budget Storage 1 – Don't delete (budget data)**. Reopen Office Budget. After it finds the card, you can archive it (open the card → Archive) so it is not sitting on the board. Do not delete it. If you already archived it and expenses look missing, go to the board menu → **Archived items**, send that card back to the board, and reopen Office Budget.
 - **I still have the old Google Sheet.** You can leave it or delete it. This Power-Up does not use it.
 
 ---
 
-## Monthly update to a Google Sheet
+## Monthly update by email
 
-You can have Office Budget send a JSON snapshot to a Google Sheet once a month. You do this with a free Apps Script web app in Drive — no API keys.
+You can have Office Budget email you a readable monthly summary. This uses a free Apps Script web app — no Google Sheet, and no API keys.
 
-1. In Google Drive, create a Google Sheet (any name, for example “Office Budget monthly updates”).
-2. In that sheet, open **Extensions > Apps Script**.
-3. Delete any starter code and paste the contents of `office-budget-webhook.gs` (this file is included with the Power-Up package). Click **Save**.
-4. Click **Deploy > New deployment**. Choose type **Web app**. Set **Execute as** to **Me** and **Who has access** to **Anyone**. Authorize when Google asks.
-5. Copy the web app URL. It should look like `https://script.google.com/macros/s/…/exec`.
-6. In Trello, open **Office Budget > Settings > Monthly update**, paste the URL, and click **Save URL**. Click **Send update now** once to confirm a row appears in the sheet.
+1. Open [script.google.com](https://script.google.com) and click **New project**.
+2. Delete any starter code and paste the contents of `office-budget-webhook.gs` (this file is included with the Power-Up package). Click **Save**.
+3. At the top of the script, set `RECIPIENT` to the email address that should get the summary. Click **Save**.
+4. Select the function **testSend** and click **Run**. Authorize the script when Google asks. You should get a test email.
+5. Click **Deploy > New deployment**. Choose type **Web app**. Set **Execute as** to **Me** and **Who has access** to **Anyone**. Copy the web app URL (`https://script.google.com/macros/s/…/exec`).
+6. In Trello, open **Office Budget > Settings > Monthly update**, paste the URL, and click **Save URL**. Click **Send update now** to send one from the app.
 
 After that, the first time someone opens Office Budget in a new calendar month (America/Chicago), it will automatically send a snapshot of the previous month. If a send fails, it will try again the next time the window is opened. Google’s response cannot be read from Trello, so “sent” means the request left the browser without a network error.
-
-The snapshot includes the office name, period, biennium totals, planned categories, unplanned / unitemized amounts, and expenses during that month.
 

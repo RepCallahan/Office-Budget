@@ -1,15 +1,20 @@
 /* global TrelloPowerUp */
 /**
  * Shared helpers for the Budget Sync Trello Power-Up.
- * Budget data is stored in board-level shared pluginData under the short key "b".
- * Trello caps the stringified object at 4096 characters per scope/visibility pair.
+ * Categories, groups, and settings are stored in board-level shared pluginData
+ * under the short key "b". Logged expenses move to card-scoped shared pluginData
+ * (key "e") on one or more storage cards named like
+ * "Budget Storage 1 – Don't delete (budget data)". Trello caps each
+ * scope/visibility pair at 4096 characters, so each storage card adds another
+ * 4096 characters. Card ids are remembered in board field "h".
  *
  * Stored shape (v4, backward compatible with v2 and v3):
  *   { v: 4, t: total, s: startingSpent, p: "YYYY-MM-DD",
- *     e: [[id, date, desc, cat, amount, by]],
+ *     e: [[id, date, desc, cat, amount, by]],  // board copy is cleared after migration
  *     c: [[id, name, plannedCents, alreadyCents?, groupIndex?]],
  *     g: ["Spring Survey", ...],
- *     k: webhookUrl, m: lastAutoMonth, n: lastAttemptMs, o: lastOk, f: 1 if default categories were seeded }
+ *     k: webhookUrl, m: lastAutoMonth, n: lastAttemptMs, o: lastOk, f: 1 if default categories were seeded,
+ *     h: ["cardId", ...] }
  * Expense "cat" values:
  *   - a number 0-22: legacy built-in state category (v2 data)
  *   - "#id": a custom planned category in `c`
@@ -17,8 +22,9 @@
  *   - any other string: legacy "Other" free text, or a deleted category's name
  * `t`/`s` and expense amounts stay in dollars. Category planned/already use integer cents.
  * Optional keys (`c`, `g`, `k`, `m`, `n`, `o`) are omitted when empty.
- * All board+shared pluginData keys share one 4096-character cap, so everything
- * stays in the single key "b".
+ * Older copies that only know board key "b" still load categories and any
+ * expenses left on the board. After expenses move to storage cards, use this
+ * version so those expenses stay visible.
  */
 (function (root) {
   var STORAGE_KEY = 'b';
@@ -55,7 +61,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261124e';
+  var ASSET_VERSION = '20261127b';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
@@ -161,7 +167,8 @@
       m: '',
       n: 0,
       o: 0,
-      f: 0
+      f: 0,
+      h: []
     };
   }
 
@@ -434,6 +441,19 @@
     target.n = source && source.n ? Number(source.n) || 0 : 0;
     target.o = source && typeof source.o !== 'undefined' ? Number(source.o) || 0 : 0;
     target.f = source && source.f ? 1 : 0;
+    if (source && Array.isArray(source.h)) {
+      var ids = [];
+      var seen = {};
+      source.h.forEach(function (id) {
+        id = String(id || '').trim();
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        ids.push(id);
+      });
+      target.h = ids;
+    } else if (typeof target.h === 'undefined') {
+      target.h = [];
+    }
     return target;
   }
 
@@ -494,54 +514,380 @@
     if (budget && budget.n) packed.n = Number(budget.n) || 0;
     if (budget && budget.n) packed.o = Number(budget.o) || 0;
     if (budget && budget.f) packed.f = 1;
+    if (budget && Array.isArray(budget.h) && budget.h.length) {
+      var hid = [];
+      var hseen = {};
+      budget.h.forEach(function (id) {
+        id = String(id || '').trim();
+        if (!id || hseen[id]) return;
+        hseen[id] = true;
+        hid.push(id);
+      });
+      if (hid.length) packed.h = hid;
+    }
     return packed;
   }
 
+  var STORAGE_EXPENSE_KEY = 'e';
+  var STORAGE_NAME_RE = /^\s*budget storage(?:\s+(\d+))?(?:\b.*)?$/i;
+
+  function storageCardTitle(n) {
+    return "Budget Storage " + Number(n) + " – Don't delete (budget data)";
+  }
+
+  function parseStorageIds(raw) {
+    if (!Array.isArray(raw)) return [];
+    var ids = [];
+    var seen = {};
+    raw.forEach(function (id) {
+      id = String(id || '').trim();
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      ids.push(id);
+    });
+    return ids;
+  }
+
+  function storageIdsOf(budget) {
+    return parseStorageIds(budget && budget.h);
+  }
+
+  function isStorageCardName(name) {
+    return STORAGE_NAME_RE.test(String(name || ''));
+  }
+
+  function parseStorageIndex(name) {
+    var match = String(name || '').trim().match(STORAGE_NAME_RE);
+    if (!match) return 0;
+    return match[1] ? Number(match[1]) : 1;
+  }
+
+  function serializeExpenseRows(list) {
+    return (list || []).map(function (x) {
+      return [
+        String(x.id || ''),
+        String(x.date || ''),
+        String(x.desc || ''),
+        packCategory(x),
+        Number(x.amount) || 0,
+        String(x.by || '')
+      ];
+    });
+  }
+
+  function packCardExpenses(list) {
+    return { v: 4, e: serializeExpenseRows(list) };
+  }
+
+  function cardStorageSize(list) {
+    return JSON.stringify({ e: packCardExpenses(list) }).length;
+  }
+
+  function parseCardExpenses(raw, budget) {
+    if (raw == null || raw === '') return [];
+    var rows = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.e) ? raw.e : []);
+    return rows.map(function (row) { return parseExpense(row, budget); }).filter(Boolean);
+  }
+
+  function mergeExpenses(primary, secondary) {
+    var out = [];
+    var seen = {};
+    function add(list) {
+      (list || []).forEach(function (item) {
+        if (!item || !item.id || seen[item.id]) return;
+        seen[item.id] = true;
+        out.push(item);
+      });
+    }
+    add(primary);
+    add(secondary);
+    return out;
+  }
+
+  function boardPackedOf(budget, omitExpenses) {
+    var packed = serialize(budget);
+    if (omitExpenses) delete packed.e;
+    else if (packed.e && !packed.e.length) delete packed.e;
+    var ids = storageIdsOf(budget);
+    if (ids.length) packed.h = ids;
+    else delete packed.h;
+    return packed;
+  }
+
+  function boardStorageSize(budget, omitExpenses) {
+    return JSON.stringify({ b: boardPackedOf(budget, omitExpenses) }).length;
+  }
+
+  function planStorage(budget) {
+    var ids = storageIdsOf(budget);
+    var expenses = (budget && budget.e) || [];
+    var onCards = ids.length > 0;
+    var boardSize = boardStorageSize(budget, onCards);
+    var boardOver = boardSize > PLUGIN_LIMIT;
+    if (!onCards) {
+      var used = boardStorageSize(budget, false);
+      return {
+        ids: [],
+        onCards: false,
+        boardPacked: boardPackedOf(budget, false),
+        boardSize: used,
+        chunks: [],
+        leftover: [],
+        used: used,
+        limit: PLUGIN_LIMIT,
+        cardCount: 0,
+        full: used > PLUGIN_LIMIT,
+        needCard: false,
+        needSetup: true,
+        nextTitle: storageCardTitle(1)
+      };
+    }
+    var remaining = expenses.slice();
+    var chunks = [];
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      var chunk = [];
+      while (remaining.length) {
+        var trial = chunk.concat([remaining[0]]);
+        if (cardStorageSize(trial) > PLUGIN_LIMIT) break;
+        chunk.push(remaining.shift());
+      }
+      chunks.push({
+        id: ids[i],
+        list: chunk,
+        size: cardStorageSize(chunk)
+      });
+    }
+    var cardUsed = 0;
+    chunks.forEach(function (chunk) { cardUsed += chunk.size; });
+    var needCard = remaining.length > 0;
+    return {
+      ids: ids,
+      onCards: true,
+      boardPacked: boardPackedOf(budget, true),
+      boardSize: boardSize,
+      chunks: chunks,
+      leftover: remaining,
+      used: boardSize + cardUsed,
+      limit: PLUGIN_LIMIT * (1 + ids.length),
+      cardCount: ids.length,
+      full: boardOver,
+      needCard: needCard,
+      needSetup: false,
+      nextTitle: storageCardTitle(ids.length + 1)
+    };
+  }
+
   function storageSize(budget) {
-    return JSON.stringify({ b: serialize(budget) }).length;
+    return planStorage(budget).used;
   }
 
   function storageInfo(budget) {
-    var used = storageSize(budget);
-    var ratio = used / PLUGIN_LIMIT;
+    var plan = planStorage(budget);
+    var store = budget && budget._storage;
+    var cardCount = plan.cardCount || (store && store.ids && store.ids.length) || 0;
+    var needSetup = cardCount === 0;
+    var ratio = plan.limit ? plan.used / plan.limit : 0;
+    var full = plan.full || plan.needCard;
     return {
-      used: used,
-      limit: PLUGIN_LIMIT,
+      used: plan.used,
+      limit: plan.limit,
       ratio: ratio,
-      percent: used >= PLUGIN_LIMIT ? 100 : Math.min(99, Math.round(ratio * 100)),
-      warn: ratio >= WARN_RATIO,
-      full: used >= PLUGIN_LIMIT
+      percent: full && plan.used >= plan.limit ? 100 : Math.min(99, Math.round(ratio * 100)),
+      warn: !full && ratio >= WARN_RATIO,
+      full: !!plan.full,
+      needCard: !!plan.needCard,
+      needSetup: needSetup,
+      cardCount: cardCount,
+      nextTitle: plan.nextTitle,
+      missing: (store && store.missing) || []
     };
   }
 
   function wouldFit(budget) {
-    return storageSize(budget) <= PLUGIN_LIMIT;
+    var plan = planStorage(budget);
+    return !plan.full && !plan.needCard;
+  }
+
+  function listVisibleCards(t) {
+    if (!t || typeof t.cards !== 'function') return Promise.resolve([]);
+    return Promise.resolve().then(function () {
+      return t.cards('id', 'name', 'closed');
+    }).then(function (cards) {
+      return Array.isArray(cards) ? cards : [];
+    }).catch(function () {
+      return [];
+    });
+  }
+
+  function resolveStorageCards(t, budget) {
+    var known = storageIdsOf(budget);
+    return listVisibleCards(t).then(function (cards) {
+      var found = cards.filter(function (card) {
+        return card && card.id && !card.closed && isStorageCardName(card.name);
+      }).sort(function (a, b) {
+        return parseStorageIndex(a.name) - parseStorageIndex(b.name);
+      });
+      var ids = known.slice();
+      found.forEach(function (card) {
+        if (ids.indexOf(String(card.id)) < 0) ids.push(String(card.id));
+      });
+      return {
+        ids: ids,
+        visible: found,
+        needSetup: ids.length === 0,
+        nextTitle: storageCardTitle(ids.length + 1),
+        missing: []
+      };
+    });
+  }
+
+  function readCardExpenses(t, ids, budget, store) {
+    var missing = (store && store.missing) || [];
+    var reads = (ids || []).map(function (id) {
+      return Promise.resolve().then(function () {
+        return t.get(id, 'shared', STORAGE_EXPENSE_KEY);
+      }).then(function (raw) {
+        return parseCardExpenses(raw, budget);
+      }).catch(function () {
+        missing.push(id);
+        return [];
+      });
+    });
+    return Promise.all(reads).then(function (groups) {
+      var all = [];
+      groups.forEach(function (list) { all = all.concat(list); });
+      if (store) store.missing = missing;
+      return all;
+    });
+  }
+
+  function writeCardExpenses(t, chunks) {
+    var writes = (chunks || []).map(function (chunk) {
+      return Promise.resolve().then(function () {
+        return t.set(chunk.id, 'shared', STORAGE_EXPENSE_KEY, packCardExpenses(chunk.list));
+      });
+    });
+    return Promise.all(writes);
+  }
+
+  function clearCardExpenses(t, ids) {
+    var writes = (ids || []).map(function (id) {
+      return Promise.resolve().then(function () {
+        if (typeof t.remove === 'function') {
+          return t.remove(id, 'shared', STORAGE_EXPENSE_KEY);
+        }
+        return t.set(id, 'shared', STORAGE_EXPENSE_KEY, packCardExpenses([]));
+      }).catch(function () {
+        return t.set(id, 'shared', STORAGE_EXPENSE_KEY, packCardExpenses([]));
+      });
+    });
+    return Promise.all(writes);
+  }
+
+  function rejectStorage(code, extra) {
+    var err = new Error(code);
+    err.code = code;
+    if (extra) {
+      Object.keys(extra).forEach(function (key) { err[key] = extra[key]; });
+    }
+    return Promise.reject(err);
   }
 
   function load(t) {
-    return t.get('board', 'shared', STORAGE_KEY).then(function (raw) {
-      return normalize(raw);
+    return Promise.resolve().then(function () {
+      return t.get('board', 'shared', STORAGE_KEY);
+    }).then(function (raw) {
+      var budget = normalize(raw);
+      return resolveStorageCards(t, budget).then(function (store) {
+        if (!budget) {
+          return { budget: null, store: store };
+        }
+        budget.h = store.ids.slice();
+        var boardExpenses = (budget.e || []).slice();
+        return readCardExpenses(t, store.ids, budget, store).then(function (cardExpenses) {
+          budget.e = mergeExpenses(cardExpenses, boardExpenses);
+          budget._storage = store;
+          var shouldMigrate = store.ids.length > 0 && boardExpenses.length > 0;
+          if (!shouldMigrate) return { budget: budget, store: store };
+          return save(t, budget).then(function () {
+            budget._storage = store;
+            return { budget: budget, store: store };
+          }).catch(function (err) {
+            budget.e = mergeExpenses(cardExpenses, boardExpenses);
+            store.migrateError = err;
+            budget._storage = store;
+            return { budget: budget, store: store };
+          });
+        });
+      });
+    }).then(function (result) {
+      return result.budget;
     });
   }
 
   function save(t, budget) {
-    var packed = serialize(budget);
-    var size = JSON.stringify({ b: packed }).length;
-    if (size > PLUGIN_LIMIT) {
-      var err = new Error('FULL');
-      err.code = 'FULL';
-      err.size = size;
-      return Promise.reject(err);
-    }
-    return t.set('board', 'shared', STORAGE_KEY, packed);
+    var next = withMeta(budget);
+    return resolveStorageCards(t, next).then(function (store) {
+      next.h = store.ids.slice();
+      next._storage = store;
+      var plan = planStorage(next);
+      if (plan.full) {
+        return rejectStorage('FULL', { size: plan.boardSize, used: plan.used, limit: plan.limit });
+      }
+      if (plan.needCard) {
+        return rejectStorage('NEED_CARD', { title: plan.nextTitle, leftover: plan.leftover.length });
+      }
+      var writes = plan.onCards ? writeCardExpenses(t, plan.chunks) : Promise.resolve();
+      return writes.then(function () {
+        return t.set('board', 'shared', STORAGE_KEY, plan.boardPacked);
+      });
+    });
   }
 
   function remove(t) {
-    if (typeof t.remove === 'function') {
-      return t.remove('board', 'shared', STORAGE_KEY);
-    }
-    return t.set('board', 'shared', STORAGE_KEY, null);
+    return Promise.resolve().then(function () {
+      return t.get('board', 'shared', STORAGE_KEY);
+    }).then(function (raw) {
+      var ids = parseStorageIds(raw && raw.h);
+      return clearCardExpenses(t, ids).then(function () {
+        if (typeof t.remove === 'function') return t.remove('board', 'shared', STORAGE_KEY);
+        return t.set('board', 'shared', STORAGE_KEY, null);
+      });
+    });
   }
+
+  function setupCardMessage() {
+    return 'To keep more expenses than Trello allows on the board itself, add a card named “' + storageCardTitle(1) + '”, then reopen Office Budget. You can archive that card afterward so it stays off the board — just don’t delete it.';
+  }
+
+  function needCardMessage(title) {
+    return 'To save more expenses, add a card named “' + (title || storageCardTitle(1)) + '”, then reopen Office Budget. You can archive that card afterward so it stays off the board — just don’t delete it.';
+  }
+
+  function fullMessage() {
+    return 'Trello’s storage for this budget is full. Use Archive / roll up to fold logged expenses into already spent, or add another card named like “' + storageCardTitle(2) + '” and reopen Office Budget.';
+  }
+
+  function warnMessage(info) {
+    var extra = info && info.cardCount ? ' across the board and ' + info.cardCount + ' storage card' + (info.cardCount === 1 ? '' : 's') : '';
+    return 'Storage is getting full (' + (info && info.percent) + '% of Trello’s limit' + extra + '). After you reconcile with the state report, use Archive / roll up to free space, or add another Budget Storage card.';
+  }
+
+  function saveErrorMessage(err) {
+    if (err && err.code === 'NEED_CARD') return needCardMessage(err.title);
+    if (err && (err.code === 'FULL' || (err.message && String(err.message).indexOf('4096') !== -1))) return fullMessage();
+    return 'Could not save. Please try again.';
+  }
+
+  function storageLineText(info) {
+    var cards = info.cardCount || 0;
+    var where = cards ? (' across the board and ' + cards + ' storage card' + (cards === 1 ? '' : 's')) : " of Trello’s board limit";
+    if (!cards) where = " of Trello’s board limit";
+    else where = ' across the board and ' + cards + ' storage card' + (cards === 1 ? '' : 's');
+    return 'Storage used: ' + info.percent + '%' + where + ' (' + info.used + ' of ' + info.limit + ' characters).';
+  }
+
 
   function alreadyTotalOf(budget) {
     var sum = 0;
@@ -730,6 +1076,7 @@
     next.n = 0;
     next.o = 0;
     next.f = 1;
+    next.h = Array.isArray(budget && budget.h) ? budget.h.slice() : [];
     return next;
   }
 
@@ -1014,13 +1361,6 @@
     el.className = 'error is-visible';
   }
 
-  function fullMessage() {
-    return 'This board is out of storage space (Trello caps each Power-Up at 4,096 characters). Use Archive / roll up to fold logged expenses into the already-spent amount, or delete older expenses.';
-  }
-
-  function warnMessage(info) {
-    return 'This board is getting full (' + info.percent + '% of Trello’s storage limit). After you reconcile with the state report, use Archive / roll up to free space.';
-  }
 
 
   var OFFICE_GROUPS = [
@@ -1308,9 +1648,11 @@
       totalSpent: moneyRound(spent),
       left: moneyRound(left),
       percentUsed: budget && budget.t ? Math.round((spent / budget.t) * 100) : 0,
+      percentRemaining: percentRemaining(budget),
       planned: track.categories.map(function (row) {
         return {
-          name: row.groupName ? (row.groupName + ' / ' + row.name) : row.name,
+          group: row.groupName || '',
+          name: row.name,
           planned: row.planned,
           spent: row.spent,
           left: row.left,
@@ -1322,6 +1664,16 @@
         unitemized: track.unitemized,
         groups: track.unplannedGroups
       },
+      expenses: sortExpenses((budget && budget.e) || []).map(function (item) {
+        return {
+          date: item.date || '',
+          desc: item.desc || '',
+          category: categoryLabel(item.catPacked != null && item.catPacked !== '' ? item.catPacked : packCategory(item), budget),
+          amount: moneyRound(item.amount),
+          by: item.by || ''
+        };
+      }),
+      expenseCount: ((budget && budget.e) || []).length,
       expensesThisMonth: moneyRound(monthTotal),
       expenseCountThisMonth: monthExpenses.length,
       sentBy: sentBy || ''
@@ -1357,6 +1709,7 @@
 
   root.BudgetSync = {
     STORAGE_KEY: STORAGE_KEY,
+    STORAGE_EXPENSE_KEY: STORAGE_EXPENSE_KEY,
     DEFAULT_TOTAL: DEFAULT_TOTAL,
     PLUGIN_LIMIT: PLUGIN_LIMIT,
     CATEGORIES: CATEGORIES,
@@ -1391,6 +1744,13 @@
     storageSize: storageSize,
     storageInfo: storageInfo,
     wouldFit: wouldFit,
+    planStorage: planStorage,
+    storageCardTitle: storageCardTitle,
+    isStorageCardName: isStorageCardName,
+    setupCardMessage: setupCardMessage,
+    needCardMessage: needCardMessage,
+    saveErrorMessage: saveErrorMessage,
+    storageLineText: storageLineText,
     load: load,
     save: save,
     remove: remove,
