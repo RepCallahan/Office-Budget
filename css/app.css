@@ -937,3 +937,15 @@ button.danger:hover,
   color: var(--muted);
   letter-spacing: 0.02em;
 }
+
+/* Google storage problem (shown above everything, red) */
+#cloud-error {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(640px, calc(100% - 32px));
+  box-shadow: 0 8px 24px rgba(17, 24, 39, .12);
+}
+#cloud-error[hidden] { display: none; }

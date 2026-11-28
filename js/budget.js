@@ -61,7 +61,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261127d';
+  var ASSET_VERSION = '20261128b';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
@@ -683,8 +683,9 @@
   }
 
   function storageInfo(budget) {
-    var plan = planStorage(budget);
     var store = budget && budget._storage;
+    if (store && store.google) return cloudStorageInfo(budget);
+    var plan = planStorage(budget);
     var cardCount = plan.cardCount || (store && store.ids && store.ids.length) || 0;
     var needSetup = cardCount === 0;
     var ratio = plan.limit ? plan.used / plan.limit : 0;
@@ -700,7 +701,8 @@
       needSetup: needSetup,
       cardCount: cardCount,
       nextTitle: plan.nextTitle,
-      missing: (store && store.missing) || []
+      missing: (store && store.missing) || [],
+      cloudError: (store && store.cloudError) || null
     };
   }
 
@@ -870,17 +872,22 @@
   }
 
   function warnMessage(info) {
+    if (info && info.google) return 'Google storage for this budget is getting full (' + info.percent + '%). Use Archive / roll up to free space.';
     var extra = info && info.cardCount ? ' across the board and ' + info.cardCount + ' storage card' + (info.cardCount === 1 ? '' : 's') : '';
     return 'Storage is getting full (' + (info && info.percent) + '% of Trello’s limit' + extra + '). After you reconcile with the state report, use Archive / roll up to free space, or add another Budget Storage card.';
   }
 
   function saveErrorMessage(err) {
+    if (err && err.cloud && cloudLib()) return cloudLib().errorMessage(err, 'Office Budget');
     if (err && err.code === 'NEED_CARD') return needCardMessage(err.title);
     if (err && (err.code === 'FULL' || (err.message && String(err.message).indexOf('4096') !== -1))) return fullMessage();
     return 'Could not save. Please try again.';
   }
 
   function storageLineText(info) {
+    if (info && info.google) {
+      return 'Your budget is stored in Google (in the Office Budget Email script). Storage used: ' + info.percent + '% (' + info.used.toLocaleString('en-US') + ' of ' + info.limit.toLocaleString('en-US') + ' characters).';
+    }
     var cards = info.cardCount || 0;
     var where = cards ? (' across the board and ' + cards + ' storage card' + (cards === 1 ? '' : 's')) : " of Trello’s board limit";
     if (!cards) where = " of Trello’s board limit";
@@ -1772,6 +1779,171 @@
   }
 
 
+  /* ---------- Google storage (see js/cloud.js) ---------- */
+  var CLOUD_APP = 'budget';
+  function cloudLib() {
+    return root.OfficeCloud || (typeof globalThis !== 'undefined' && globalThis.OfficeCloud) || null;
+  }
+  var CLOUD_LIMIT = 300000;
+
+  function serializeForCloud(budget) {
+    var packed = serialize(withMeta(budget));
+    delete packed.h;
+    if (packed.e && !packed.e.length) delete packed.e;
+    return JSON.stringify(packed);
+  }
+
+  function cloudCountOf(body) {
+    var raw = JSON.parse(body);
+    return ((raw && raw.e) || []).length + ((raw && raw.c) || []).length;
+  }
+
+  function localCountOf(budget) {
+    return ((budget && budget.e) || []).length + parseCategories(budget && budget.c).length;
+  }
+
+  function budgetFromCloud(body, rev) {
+    var budget = normalize(JSON.parse(body));
+    if (!budget) return null;
+    budget.h = [];
+    budget._storage = { google: true, ids: [], missing: [], rev: rev };
+    return budget;
+  }
+
+  function cloudStorageInfo(budget) {
+    var used = serializeForCloud(budget).length;
+    var ratio = used / CLOUD_LIMIT;
+    var full = used > CLOUD_LIMIT;
+    return {
+      google: true,
+      used: used,
+      limit: CLOUD_LIMIT,
+      ratio: ratio,
+      percent: full ? 100 : Math.min(99, Math.round(ratio * 100)),
+      warn: !full && ratio >= WARN_RATIO,
+      full: full,
+      needCard: false,
+      needSetup: false,
+      cardCount: 0,
+      nextTitle: '',
+      missing: [],
+      cloudError: null
+    };
+  }
+
+  /**
+   * Where the budget is read from and saved to.
+   * Google mode once the board has {on:1} in pluginData "g"; until then Trello,
+   * and on the first open (by someone who can edit) the Trello copy is moved to
+   * Google automatically. Trello data is never changed by the move and is never
+   * written again in Google mode, so saves cannot trigger Trello re-render loops.
+   */
+  function createStore(t, opts) {
+    opts = opts || {};
+    var Cloud = opts.cloud || cloudLib();
+    var ro = { fetch: opts.fetch, timeout: opts.timeout };
+    var state = { mode: 'trello', cfg: null, rev: 0, migrating: null, tried: false, error: null };
+
+    function canWrite() { return typeof opts.canWrite === 'function' ? !!opts.canWrite() : true; }
+    function tag(err) {
+      if (err && typeof err === 'object') err.cloud = true;
+      throw err;
+    }
+    function attachError(budget, err) {
+      if (!budget) return budget;
+      if (!budget._storage) budget._storage = { ids: [], missing: [] };
+      budget._storage.cloudError = err;
+      return budget;
+    }
+    function loadGoogle() {
+      Cloud.rememberUrl(state.cfg.u);
+      return Cloud.getWithClaim(state.cfg, CLOUD_APP, ro).then(function (r) {
+        state.rev = r.rev;
+        return r.has ? budgetFromCloud(r.body, r.rev) : null;
+      }).catch(tag);
+    }
+    function migrate(url, budget) {
+      state.tried = true;
+      var run = Cloud.connect(t, {
+        app: CLOUD_APP,
+        url: url,
+        fetch: opts.fetch,
+        timeout: opts.timeout,
+        readLocal: function () {
+          return budget ? { body: serializeForCloud(budget), count: localCountOf(budget) } : null;
+        },
+        countOf: cloudCountOf
+      }).then(function (cfg) {
+        state.cfg = cfg;
+        state.mode = 'google';
+        state.error = null;
+        return loadGoogle();
+      }, function (err) {
+        if (err && typeof err === 'object') err.cloud = true;
+        state.error = err;
+        return attachError(budget, err);
+      });
+      state.migrating = run.then(function (v) { state.migrating = null; return v; }, function (e) { state.migrating = null; throw e; });
+      return state.migrating;
+    }
+    function load() {
+      if (state.migrating) return state.migrating;
+      return Cloud.getConfig(t).then(function (cfg) {
+        if (Cloud.isOn(cfg)) {
+          state.cfg = cfg;
+          state.mode = 'google';
+          return loadGoogle();
+        }
+        state.mode = 'trello';
+        return load_(t).then(function (budget) {
+          var url = (budget && budget.k) || (cfg && cfg.u);
+          if (budget && budget.k) Cloud.rememberUrl(budget.k);
+          if (state.tried || !canWrite() || !Cloud.isScriptUrl(url)) {
+            return state.error ? attachError(budget, state.error) : budget;
+          }
+          return migrate(url, budget);
+        });
+      });
+    }
+    function save(budget) {
+      if (state.mode !== 'google') return save_(t, budget);
+      var body = serializeForCloud(budget);
+      if (body.length > CLOUD_LIMIT) return rejectStorage('TOO_BIG', { cloud: true });
+      return Cloud.put(state.cfg.u, CLOUD_APP, state.cfg.s, body, state.rev, false, ro).then(function (r) {
+        state.rev = r.rev;
+      }).catch(tag);
+    }
+    function removeAll() {
+      if (state.mode !== 'google') return remove(t);
+      return Cloud.clear(state.cfg.u, CLOUD_APP, state.cfg.s, state.rev, ro).then(function (r) {
+        state.rev = r.rev;
+      }).catch(tag);
+    }
+    // Called after the webhook link is saved in Settings.
+    function linkChanged(url) {
+      if (state.mode !== 'google') {
+        state.tried = false;
+        state.error = null;
+        return Promise.resolve();
+      }
+      return Cloud.changeUrl(t, state.cfg, url, CLOUD_APP, ro).then(function (cfg) {
+        state.cfg = cfg;
+      }).catch(tag);
+    }
+    return {
+      load: load,
+      save: save,
+      remove: removeAll,
+      linkChanged: linkChanged,
+      mode: function () { return state.mode; },
+      error: function () { return state.error; }
+    };
+  }
+
+
+  var load_ = load;
+  var save_ = save;
+
   root.BudgetSync = {
     STORAGE_KEY: STORAGE_KEY,
     STORAGE_EXPENSE_KEY: STORAGE_EXPENSE_KEY,
@@ -1877,7 +2049,12 @@
     applyTheme: applyTheme,
     showError: showError,
     fullMessage: fullMessage,
-    warnMessage: warnMessage
+    warnMessage: warnMessage,
+    CLOUD_LIMIT: CLOUD_LIMIT,
+    serializeForCloud: serializeForCloud,
+    budgetFromCloud: budgetFromCloud,
+    cloudCountOf: cloudCountOf,
+    createStore: createStore
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = root.BudgetSync;
