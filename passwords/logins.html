@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Office Passwords</title>
+    <link rel="stylesheet" href="./css/app.css?v=20261127b">
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="sidebar" aria-label="Sections">
+        <div class="sidebar-brand">
+          <img class="sidebar-logo" src="./img/wi-seal.png?v=20261127b" width="192" height="200" alt="Wisconsin state seal">
+          <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Passwords</span>
+        </div>
+        <nav class="sidebar-nav">
+          <button type="button" class="nav-btn is-active" data-section="logins" aria-current="page">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>
+            All Logins
+          </button>
+          <button type="button" class="nav-btn" data-section="settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+            Settings
+          </button>
+        </nav>
+        <div class="sidebar-foot"><span id="side-count"></span></div>
+      </aside>
+
+      <main class="app-main" id="main">
+        <div id="banner" class="banner" hidden></div>
+
+        <section class="app-section" data-section-panel="logins">
+          <div class="page-head">
+            <h1>All Logins</h1>
+            <button type="button" class="primary" id="btn-add">+ Add login</button>
+          </div>
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="Search logins" aria-label="Search logins" autocomplete="off">
+          </div>
+          <div id="list" class="list"></div>
+        </section>
+
+        <section class="app-section" data-section-panel="settings" hidden>
+          <div class="page-head"><h1>Settings</h1></div>
+          <div class="card">
+            <h2>Storage</h2>
+            <div class="meter" role="img" id="meter-wrap"><div class="meter-fill" id="meter-fill"></div></div>
+            <p class="meter-text" id="meter-text"></p>
+            <p class="muted" id="meter-room"></p>
+          </div>
+          <div class="card">
+            <h2>About</h2>
+            <p class="muted">Logins are stored on this Trello board and are visible to anyone who has access to the board. They are not encrypted.</p>
+            <p class="muted">Version <span id="ver"></span></p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="overlay" id="form-overlay" hidden>
+      <form class="dialog" id="login-form" autocomplete="off">
+        <h2 id="form-title">Add login</h2>
+        <div class="field"><label for="f-name">Name</label><input id="f-name" type="text" maxlength="40" required placeholder="e.g. Facebook page"></div>
+        <div class="field"><label for="f-url">Website</label><input id="f-url" type="text" maxlength="80" placeholder="example.com" inputmode="url"></div>
+        <div class="stack">
+          <div class="field"><label for="f-user">Username</label><input id="f-user" type="text" maxlength="60" autocapitalize="off" spellcheck="false"></div>
+          <div class="field">
+            <label for="f-pass">Password</label>
+            <div class="pw-row">
+              <input id="f-pass" type="password" maxlength="64" autocapitalize="off" spellcheck="false">
+              <button type="button" class="icon-btn" id="f-eye" aria-label="Show password" title="Show / hide"></button>
+              <button type="button" class="ghost" id="f-gen">Generate</button>
+            </div>
+          </div>
+        </div>
+        <div id="form-error" class="error" role="alert"></div>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" id="f-cancel">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="overlay" id="confirm-overlay" hidden>
+      <div class="dialog small" role="alertdialog" aria-labelledby="confirm-title">
+        <h2 id="confirm-title">Delete this login?</h2>
+        <p class="muted" id="confirm-text"></p>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" id="c-cancel">Cancel</button>
+          <button type="button" class="danger" id="c-ok">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden>Copied</div>
+
+    <script src="./js/vault.js?v=20261127b"></script>
+    <script src="./js/app.js?v=20261127b"></script>
+  </body>
+</html>
