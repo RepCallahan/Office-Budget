@@ -87,12 +87,19 @@ function copyText(value, label) {
 function renderCapacity() {
   var cap = Vault.capacity(data);
   var banner = $('banner');
-  if (cap.full) {
+  if (cap.missing && cap.missing.length) {
+    banner.hidden = false; banner.className = 'banner';
+    banner.textContent = Vault.missingCardMessage();
+  } else if (cap.needSetup) {
+    banner.hidden = false; banner.className = 'banner';
+    banner.textContent = Vault.setupCardMessage();
+  } else if (cap.full || cap.needCard) {
     banner.hidden = false; banner.className = 'banner is-full';
-    banner.textContent = 'Storage is full. Delete a login before adding more.';
+    banner.textContent = cap.needCard ? Vault.needCardMessage(cap.nextTitle) : Vault.fullMessage();
   } else if (cap.warn) {
     banner.hidden = false; banner.className = 'banner';
-    banner.textContent = 'Storage is ' + Math.round(cap.ratio * 100) + '% full. Room for about ' + cap.roomFor + ' more logins.';
+    var across = cap.cardCount ? (' across ' + cap.cardCount + ' storage card' + (cap.cardCount === 1 ? '' : 's')) : '';
+    banner.textContent = 'Storage is ' + Math.round(cap.ratio * 100) + '% full' + across + '. Room for about ' + cap.roomFor + ' more logins.';
   } else {
     banner.hidden = true;
   }
@@ -102,12 +109,12 @@ function renderCapacity() {
 
 function renderSettings() {
   var cap = renderCapacity();
-  var pct = Math.min(100, Math.round(cap.ratio * 100));
+  var pct = Math.min(100, cap.percent != null ? cap.percent : Math.round(cap.ratio * 100));
   var fill = $('meter-fill');
   fill.style.width = pct + '%';
-  fill.classList.toggle('is-warn', cap.warn);
+  fill.classList.toggle('is-warn', cap.warn || cap.full || cap.needCard);
   $('meter-wrap').setAttribute('aria-label', pct + ' percent full');
-  text($('meter-text'), pct + '% full (' + cap.used.toLocaleString('en-US') + ' of ' + cap.limit.toLocaleString('en-US') + ' characters)');
+  text($('meter-text'), Vault.storageLineText(cap));
   text($('meter-room'), data.length + ' saved. Room for about ' + cap.roomFor + ' more.');
   text($('ver'), Vault.ASSET_VERSION);
 }
@@ -174,10 +181,12 @@ function mutate(fn) {
     if (err) throw new Error(err);
     var cap = Vault.capacity(fresh);
     var before = Vault.capacity(data);
-    if (cap.full && cap.used > before.used) {
-      throw new Error('Not enough storage left. Delete a login or shorten a long entry first.');
+    if (cap.full && cap.used > before.used && !cap.needCard && cap.cardCount) {
+      throw new Error(Vault.fullMessage());
     }
-    return Vault.save(t, fresh).then(function () { data = fresh; });
+    return Vault.save(t, fresh).then(function () { data = fresh; }).catch(function (err) {
+      throw new Error(Vault.saveErrorMessage(err));
+    });
   });
 }
 
