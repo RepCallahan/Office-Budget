@@ -211,6 +211,7 @@ function renderList() {
     shown.forEach(function (d) { list.appendChild(entry(d)); });
   }
   renderBanners();
+  renderBulletins();
 }
 
 function renderBanners() {
@@ -406,9 +407,201 @@ $('search').addEventListener('input', function () { query = $('search').value; r
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Escape') return;
   if (!$('confirm-overlay').hidden) $('confirm-overlay').hidden = true;
+  else if (!$('bull-form-overlay').hidden) closeBullForm();
+  else if (!$('bulletin-overlay').hidden) $('bp-later').click();
   else if (!$('sign-overlay').hidden) closeSign();
   else if (!$('form-overlay').hidden) closeForm();
 });
+
+
+
+/* ---------- bulletins ---------- */
+var bulletinEditId = null;
+var popQueue = [];
+var popIndex = 0;
+var skipPop = false;
+var popShown = false;
+
+function renderBulletins() {
+  var wrap = $('bulletin-banners');
+  if (!wrap) return;
+  wrap.textContent = '';
+  $('btn-bulletin').hidden = !isAdmin();
+  var list = me ? Docs.unackedBulletins(state.records, me.id) : [];
+  list.forEach(function (b) { wrap.appendChild(bannerEl(b)); });
+  if (!skipPop && !popShown && list.length) { popShown = true; openBulletinPop(list); }
+}
+
+function bannerEl(b) {
+  var box = el('div', 'bulletin-banner');
+  box.appendChild(el('p', 'bb-kicker', 'Office Bulletin'));
+  box.appendChild(el('h3', null, b.title));
+  if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
+  var acts = el('div', 'bb-actions');
+  if (b.url) {
+    var a = el('a', 'primary', 'Click here');
+    a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    acts.appendChild(a);
+  }
+  var ack = el('button', 'ghost', 'Acknowledge');
+  ack.type = 'button';
+  ack.addEventListener('click', function () { acknowledge(b.id); });
+  acts.appendChild(ack);
+  box.appendChild(acts);
+  return box;
+}
+
+function openBulletinPop(list) {
+  popQueue = list; popIndex = 0;
+  showPop();
+}
+function showPop() {
+  var b = popQueue[popIndex];
+  if (!b) { $('bulletin-overlay').hidden = true; return; }
+  text($('bp-title'), b.title);
+  text($('bp-msg'), b.message || '');
+  var link = $('bp-link');
+  if (b.url) { link.href = b.url; link.hidden = false; }
+  else { link.hidden = true; }
+  $('bulletin-overlay').hidden = false;
+}
+function closePop() { $('bulletin-overlay').hidden = true; }
+$('bp-later').addEventListener('click', function () {
+  popIndex += 1;
+  if (popIndex < popQueue.length) showPop();
+  else { skipPop = true; closePop(); }
+});
+$('bp-ack').addEventListener('click', function () {
+  var b = popQueue[popIndex];
+  if (!b) { closePop(); return; }
+  acknowledge(b.id, function () {
+    popIndex += 1;
+    if (popIndex < popQueue.length) showPop();
+    else closePop();
+  });
+});
+
+function acknowledge(id, then) {
+  if (!guardWrite() || !me) return;
+  var problem = '';
+  Docs.mutate(t, function (recs) {
+    if (Docs.findAck(recs, id, me.id)) return recs;
+    recs.push(Docs.ackRecord(id, me));
+    return recs;
+  }).then(function (s) {
+    refresh(s);
+    toast(problem || 'Acknowledged');
+    if (then) then();
+  }).catch(function (err) { toast(err.message || 'Could not save'); });
+}
+
+function openBullForm(id) {
+  if (!isAdmin()) return;
+  bulletinEditId = id || null;
+  var b = null;
+  if (id) Docs.bulletinsOf(state.records).forEach(function (x) { if (x.id === id) b = x; });
+  text($('bull-form-title'), b ? 'Edit bulletin' : 'Post bulletin');
+  $('b-title').value = b ? b.title : '';
+  $('b-msg').value = b ? b.message : '';
+  $('b-url').value = b ? b.url : '';
+  text($('bull-form-error'), '');
+  $('bull-form').querySelector('button[type=submit]').textContent = b ? 'Save' : 'Post';
+  $('bull-form-overlay').hidden = false;
+  $('b-title').focus();
+}
+function closeBullForm() { $('bull-form-overlay').hidden = true; bulletinEditId = null; }
+$('btn-bulletin').addEventListener('click', function () { if (guardWrite()) openBullForm(null); });
+$('b-cancel').addEventListener('click', closeBullForm);
+$('bull-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  if (!guardWrite() || !isAdmin()) return;
+  var title = $('b-title').value.trim();
+  if (!title) { text($('bull-form-error'), 'Please enter a title.'); return; }
+  var message = $('b-msg').value.trim();
+  if (!message) { text($('bull-form-error'), 'Please enter a message.'); return; }
+  if (message.length > Docs.MAX.message) { text($('bull-form-error'), 'That message is too long.'); return; }
+  var url = $('b-url').value.trim();
+  if (url) {
+    var u = Docs.normalizeUrl(url);
+    if (u.error) { text($('bull-form-error'), u.error); return; }
+    url = u.url;
+  }
+  var id = bulletinEditId;
+  Docs.mutate(t, function (recs) {
+    if (id) {
+      var at = -1;
+      recs.forEach(function (r, k) { if (r[0] === 'b' && r[1] === id) at = k; });
+      if (at < 0) return null;
+      recs[at] = Docs.bulletinRecord({ id: id, title: title, message: message, url: url, date: recs[at][5], active: recs[at][6] });
+    } else {
+      recs.push(Docs.bulletinRecord({ title: title, message: message, url: url, active: 1 }));
+    }
+    return recs;
+  }).then(function (s) {
+    closeBullForm(); skipPop = false; popShown = false; refresh(s); toast(id ? 'Saved' : 'Bulletin posted');
+  }).catch(function (err) { text($('bull-form-error'), err.message || 'Could not save.'); });
+});
+
+function endBulletin(id) {
+  if (!isAdmin() || !guardWrite()) return;
+  Docs.mutate(t, function (recs) {
+    recs.forEach(function (r, k) {
+      if (r[0] === 'b' && r[1] === id) recs[k] = Docs.bulletinRecord({ id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: 0 });
+    });
+    return recs;
+  }).then(function (s) { refresh(s); renderSettings(); toast('Bulletin ended'); })
+    .catch(function (err) { toast(err.message || 'Could not end bulletin'); });
+}
+
+function renderBulletinAdmin() {
+  var card = $('bulletin-admin-card');
+  var wrap = $('bulletin-admin');
+  if (!card || !wrap) return;
+  if (!isAdmin()) { card.hidden = true; return; }
+  card.hidden = false;
+  wrap.textContent = '';
+  var list = Docs.bulletinsOf(state.records, false);
+  if (!list.length) { wrap.appendChild(el('p', 'muted', 'No bulletins yet. Click “+ Post bulletin” to post one.')); return; }
+  list.forEach(function (b) {
+    var box = el('div', 'admin-bull' + (b.active ? '' : ' ended'));
+    var title = el('h3', null, b.title + (b.active ? '' : ' (ended)'));
+    box.appendChild(title);
+    if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
+    if (b.url) {
+      var a = el('a', null, 'Click here');
+      a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      box.appendChild(a);
+    }
+    box.appendChild(el('div', 'e-meta', 'Posted ' + fmtDate(b.date)));
+    var acks = Docs.acksOf(state.records, b.id);
+    var ad = el('div', 'acks');
+    ad.appendChild(el('h4', null, 'Acknowledged by'));
+    if (!acks.length) ad.appendChild(el('div', 'none', 'No one has acknowledged this yet.'));
+    else {
+      var ul = el('ul');
+      acks.forEach(function (k) { ul.appendChild(el('li', null, (k.memberName || 'Someone') + ', ' + fmtStampTime(k.at))); });
+      ad.appendChild(ul);
+    }
+    if (members.length && b.active) {
+      var done = {};
+      acks.forEach(function (k) { done[k.memberId] = true; });
+      var pending = members.filter(function (m) { return !done[m.id]; }).map(function (m) { return m.name; });
+      ad.appendChild(el('h4', null, 'Not yet acknowledged'));
+      ad.appendChild(el('div', pending.length ? 'none' : null, pending.length ? pending.join(', ') : 'Everyone on the board has acknowledged this.'));
+    }
+    box.appendChild(ad);
+    if (b.active) {
+      var acts = el('div', 'bb-actions');
+      var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
+      ed.addEventListener('click', function () { openBullForm(b.id); });
+      var en = el('button', 'danger', 'End bulletin'); en.type = 'button';
+      en.addEventListener('click', function () { endBulletin(b.id); });
+      acts.appendChild(ed); acts.appendChild(en);
+      box.appendChild(acts);
+    }
+    wrap.appendChild(box);
+  });
+}
 
 /* ---------- start ---------- */
 t.render(function () {
@@ -425,6 +618,7 @@ t.render(function () {
     }
     return first;
   }).then(function () {
+    if (me) Docs.rememberOpen(t, state.records, me.id);
     renderList();
     if (isAdmin()) return Docs.boardMembers(t).then(function (m) { members = m; renderList(); });
   }).catch(function () {

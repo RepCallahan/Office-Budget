@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Office Documents</title>
-    <link rel="stylesheet" href="./css/app.css?v=20261128a">
+    <title>Office Hub</title>
+    <link rel="stylesheet" href="./css/app.css?v=20261128b">
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
   </head>
   <body>
     <div id="app">
       <aside class="sidebar" aria-label="Sections">
         <div class="sidebar-brand">
-          <img class="sidebar-logo" src="./img/wi-seal.png?v=20261128a" width="192" height="200" alt="Wisconsin state seal">
-          <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Documents</span>
+          <img class="sidebar-logo" src="./img/wi-seal.png?v=20261128b" width="192" height="200" alt="Wisconsin state seal">
+          <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Hub</span>
         </div>
         <nav class="sidebar-nav">
           <button type="button" class="nav-btn is-active" data-section="docs" aria-current="page">
@@ -32,9 +32,13 @@
 
         <section class="app-section" data-section-panel="docs">
           <div class="page-head">
-            <h1>Office Documents</h1>
-            <button type="button" class="primary" id="btn-add">+ Add document</button>
+            <h1>Office Hub</h1>
+            <div class="head-actions">
+              <button type="button" class="ghost" id="btn-bulletin" hidden>+ Post bulletin</button>
+              <button type="button" class="primary" id="btn-add">+ Add document</button>
+            </div>
           </div>
+          <div id="bulletin-banners" class="bulletin-banners"></div>
           <div class="toolbar">
             <input id="search" type="search" placeholder="Search documents" aria-label="Search documents" autocomplete="off">
           </div>
@@ -51,6 +55,11 @@
             <p class="muted" id="meter-room"></p>
             <p class="muted" id="meter-cards"></p>
             <p class="red-note">Extra storage cards must stay in an open list on the board (collapse the list if you like). Never archive the list or the cards: Power-Ups cannot see archived cards, and your documents would seem to disappear. Never delete them.</p>
+          </div>
+          <div class="card" id="bulletin-admin-card" hidden>
+            <h2>Office Bulletins</h2>
+            <p class="muted">Active bulletins stay on screen for each staff member until they click Acknowledge. You can edit or end a bulletin at any time.</p>
+            <div id="bulletin-admin"></div>
           </div>
           <div class="card">
             <h2>Document admin</h2>
@@ -98,6 +107,34 @@
       </form>
     </div>
 
+
+    <div class="overlay" id="bulletin-overlay" hidden>
+      <div class="dialog" id="bulletin-pop" role="dialog" aria-labelledby="bp-title">
+        <p class="eyebrow">Office Bulletin</p>
+        <h2 id="bp-title"></h2>
+        <p class="bp-msg" id="bp-msg"></p>
+        <div class="dialog-actions bp-actions">
+          <a class="primary big" id="bp-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Click here</a>
+          <button type="button" class="ghost" id="bp-later">Later</button>
+          <button type="button" class="primary" id="bp-ack">Acknowledge</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="bull-form-overlay" hidden>
+      <form class="dialog" id="bull-form" autocomplete="off">
+        <h2 id="bull-form-title">Post bulletin</h2>
+        <div class="field"><label for="b-title">Title</label><input id="b-title" type="text" maxlength="80" required placeholder="e.g. Staff meeting Friday"></div>
+        <div class="field"><label for="b-msg">Message</label><textarea id="b-msg" maxlength="400" required rows="5" placeholder="What should staff know?"></textarea></div>
+        <div class="field"><label for="b-url">Link <span class="opt">(optional — shown as “Click here”)</span></label><input id="b-url" type="text" maxlength="300" placeholder="https://docs.google.com/forms/..." inputmode="url"></div>
+        <div id="bull-form-error" class="error" role="alert"></div>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" id="b-cancel">Cancel</button>
+          <button type="submit" class="primary">Post</button>
+        </div>
+      </form>
+    </div>
+
     <div class="overlay" id="confirm-overlay" hidden>
       <div class="dialog small" role="alertdialog" aria-labelledby="confirm-title">
         <h2 id="confirm-title">Delete this document?</h2>
@@ -111,7 +148,7 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-    <script src="./js/docs.js?v=20261128a"></script>
-    <script src="./js/app.js?v=20261128a"></script>
+    <script src="./js/docs.js?v=20261128b"></script>
+    <script src="./js/app.js?v=20261128b"></script>
   </body>
 </html>

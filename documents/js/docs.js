@@ -1,9 +1,11 @@
 /**
- * Shared helpers for the Office Documents Trello Power-Up.
+ * Shared helpers for the Office Hub Trello Power-Up.
  *
  * Everything is one flat list of short records:
  *   document:  ["d", id, title, url, description, "YYYY-MM-DD", sign(0|1), category, version, "YYYY-MM-DD updated"]
  *   signature: ["s", docId, memberId, memberName, typedName, "YYYY-MM-DDTHH:MMZ", version]
+ *   bulletin:   ["b", id, title, message, url, "YYYY-MM-DD", active(0|1)]
+ *   ack:        ["k", bulletinId, memberId, memberName, "YYYY-MM-DDTHH:MMZ"]
  * A signature counts only for the document version it was made on. The admin can mark a document
  * "updated", which bumps its version so everyone signs again; older signatures are kept as history
  * (visible to the admin only). Staff cannot remove or redo a signature for the current version.
@@ -16,7 +18,7 @@
  *      t.cards('id','name','closed'); closed (archived) cards are ignored. Power-Ups cannot see
  *      cards in an ARCHIVED list, so keep storage cards in an open (collapsed is fine) list.
  *
- * Signatures are hidden from staff in the interface, but this is NOT encryption:
+ * Signatures and bulletin acknowledgements are hidden from staff in the interface, but this is NOT encryption:
  * Trello pluginData can technically be read by board members through the Trello API.
  */
 (function (root) {
@@ -24,8 +26,8 @@
   var LIMIT = 4096;          // Trello's per-scope cap
   var CAP = 3900;            // what we allow ourselves (leaves headroom for Trello's wrapper)
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128a';
-  var MAX = { title: 80, url: 300, desc: 140, name: 60 };
+  var ASSET_VERSION = '20261128b';
+  var MAX = { title: 80, url: 300, desc: 140, name: 60, message: 400 };
   var CATEGORIES = ['Policies', 'Memos', 'Forms', 'Other'];
   var ADMIN_NAME_RE = /callahan/i;
   var STORAGE_NAME_RE = /^\s*document storage(?:\s+(\d+))?(?:\b.*)?$/i;
@@ -76,6 +78,11 @@
       if (!g[6]) g[6] = '1';
       return g;
     }
+    if (r[0] === 'b' && r.length >= 6) {
+      var b = ['b', str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]), Number(r[6]) ? 1 : (r[6] === 0 || r[6] === '0' ? 0 : 1)];
+      return b;
+    }
+    if (r[0] === 'k' && r.length >= 5) return r.slice(0, 5).map(str);
     return null;
   }
   function cleanRecords(list) {
@@ -250,10 +257,10 @@
   function errorWith(code, message) { var e = new Error(message); e.code = code; return Promise.reject(e); }
 
   function needCardMessage(title) {
-    return 'Storage is full. In Trello, add a card named “' + title + '” to an open list (a collapsed list is fine, but never an archived one), then reopen Office Documents and try again.';
+    return 'Storage is full. In Trello, add a card named “' + title + '” to an open list (a collapsed list is fine, but never an archived one), then reopen Office Hub and try again.';
   }
   function missingMessage() {
-    return 'A Document Storage card cannot be found, so saving is turned off to protect your documents. Open the board menu > Archived items, send the “Document Storage” card (or its list) back to the board, keep it in an open list (collapse the list if you like), then reopen Office Documents.';
+    return 'A Document Storage card cannot be found, so saving is turned off to protect your documents. Open the board menu > Archived items, send the “Document Storage” card (or its list) back to the board, keep it in an open list (collapse the list if you like), then reopen Office Hub.';
   }
 
   /** Write the records out. Changes only chunks that differ. */
@@ -299,16 +306,182 @@
   }
 
 
+
+  function bulletinRecord(o) {
+    return ['b', o.id || newId(), o.title, o.message || '', o.url || '', o.date || today(), o.active === 0 ? 0 : 1];
+  }
+  function ackRecord(bulletinId, member) {
+    return ['k', bulletinId, member.id, member.name, nowStamp()];
+  }
+  function bulletinsOf(records, activeOnly) {
+    var out = [];
+    records.forEach(function (r, i) {
+      if (r[0] !== 'b') return;
+      var row = { id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: r[6] === 1, order: i };
+      if (activeOnly && !row.active) return;
+      out.push(row);
+    });
+    out.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : b.order - a.order; });
+    return out;
+  }
+  function acksOf(records, bulletinId) {
+    var out = [];
+    records.forEach(function (r) {
+      if (r[0] === 'k' && r[1] === bulletinId) out.push({ bulletinId: r[1], memberId: r[2], memberName: r[3], at: r[4] });
+    });
+    return out;
+  }
+  function findAck(records, bulletinId, memberId) {
+    var list = acksOf(records, bulletinId);
+    for (var i = 0; i < list.length; i++) if (list[i].memberId === memberId) return list[i];
+    return null;
+  }
+  function unackedBulletins(records, memberId) {
+    return bulletinsOf(records, true).filter(function (b) {
+      return !memberId || !findAck(records, b.id, memberId);
+    });
+  }
+
+  /* ---------- board alerts (connector) ---------- */
+  var SEEN_PREFIX = 'office-documents-seen:';
+  var ALERT_PREFIX = 'office-documents-alerted:';
+
+  function boardIdOf(t) {
+    var ctx = t && typeof t.getContext === 'function' ? t.getContext() : null;
+    if (ctx && ctx.board) return String(ctx.board);
+    return 'board';
+  }
+  function storageKey(prefix, boardId, memberId) {
+    return prefix + String(boardId || 'board') + ':' + String(memberId || 'unknown');
+  }
+  function readStore(storage, key, fallback) {
+    try {
+      if (typeof storage === 'undefined' || !storage) return fallback;
+      var raw = storage.getItem(key);
+      if (raw == null) return fallback;
+      return raw;
+    } catch (e) { return fallback; }
+  }
+  function writeStore(storage, key, val) {
+    try { if (typeof storage !== 'undefined' && storage) storage.setItem(key, val); } catch (e) {}
+  }
+  /** Returns an array of previously seen document ids, or null if this member has never been recorded. */
+  function readSeen(boardId, memberId) {
+    var raw = readStore(typeof localStorage !== 'undefined' ? localStorage : undefined, storageKey(SEEN_PREFIX, boardId, memberId), null);
+    if (raw == null) return null;
+    try {
+      var arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map(String) : [];
+    } catch (e) { return []; }
+  }
+  function writeSeen(boardId, memberId, ids) {
+    writeStore(typeof localStorage !== 'undefined' ? localStorage : undefined, storageKey(SEEN_PREFIX, boardId, memberId), JSON.stringify(ids || []));
+  }
+  function wasAlerted(boardId, memberId) {
+    return !!readStore(typeof sessionStorage !== 'undefined' ? sessionStorage : undefined, storageKey(ALERT_PREFIX, boardId, memberId), null);
+  }
+  function markAlerted(boardId, memberId) {
+    writeStore(typeof sessionStorage !== 'undefined' ? sessionStorage : undefined, storageKey(ALERT_PREFIX, boardId, memberId), '1');
+  }
+  function pendingDocs(records, memberId) {
+    if (!memberId) return [];
+    return docsOf(records).filter(function (d) {
+      return d.sign && !findSig(records, d.id, memberId, d.version);
+    });
+  }
+  /**
+   * Decide what Trello board alert (if any) to show this member for documents.
+   * seenIds: array of doc ids already known, or null on first visit (existing docs are not "new").
+   * Priority: a new doc that needs their signature; else a new doc; else older unsigned required docs.
+   */
+  function alertForMember(records, memberId, seenIds) {
+    var list = docsOf(records);
+    var allIds = list.map(function (d) { return d.id; });
+    var firstVisit = seenIds == null;
+    var seen = {};
+    (seenIds || []).forEach(function (id) { seen[String(id)] = true; });
+    var newest = firstVisit ? [] : list.filter(function (d) { return !seen[d.id]; });
+    var pending = memberId ? list.filter(function (d) {
+      return d.sign && !findSig(records, d.id, memberId, d.version);
+    }) : [];
+    var newNeedSign = newest.filter(function (d) {
+      return d.sign && memberId && !findSig(records, d.id, memberId, d.version);
+    });
+    var message = null;
+    if (newNeedSign.length) {
+      message = "There's a new document that needs your review and signature";
+    } else if (newest.length) {
+      message = "There's a new document";
+    } else if (pending.length) {
+      var n = pending.length;
+      message = n === 1
+        ? 'You have 1 document that needs your review and signature'
+        : 'You have ' + n + ' documents that need your review and signature';
+    }
+    return {
+      pending: pending,
+      pendingCount: pending.length,
+      newDocs: newest,
+      newNeedSign: newNeedSign,
+      message: message,
+      allIds: allIds,
+      firstVisit: firstVisit
+    };
+  }
+  function actionCount(records, memberId) {
+    return pendingDocs(records, memberId).length + unackedBulletins(records, memberId).length;
+  }
+  function buttonTextFor(records, memberId) {
+    var n = actionCount(records, memberId);
+    return n ? 'Office Hub (' + n + ')' : 'Office Hub';
+  }
+  function bulletinAlertMessage(records, memberId) {
+    var list = unackedBulletins(records, memberId);
+    if (!list.length) return null;
+    if (list.length === 1) return 'Office bulletin: ' + list[0].title;
+    return 'You have ' + list.length + ' office bulletins to acknowledge';
+  }
+  /**
+   * Show a Trello board alert. Unacknowledged bulletins repeat every board load.
+   * Document alerts show at most once per tab session. If both apply, the bulletin
+   * takes the single Trello alert slot (Trello allows only one at a time).
+   */
+  function maybeAlert(t, records, memberId, boardId) {
+    var seen = readSeen(boardId, memberId);
+    var info = alertForMember(records, memberId, seen);
+    if (info.firstVisit || info.message) writeSeen(boardId, memberId, info.allIds);
+    var bull = bulletinAlertMessage(records, memberId);
+    var message = bull || info.message;
+    if (!message) return info;
+    if (!bull && wasAlerted(boardId, memberId)) return info;
+    if (!bull) markAlerted(boardId, memberId);
+    if (t && typeof t.alert === 'function') {
+      t.alert({ message: message, duration: 10, display: 'warning' });
+    }
+    return info;
+  }
+  function rememberOpen(t, records, memberId) {
+    if (!memberId) return;
+    writeSeen(boardIdOf(t), memberId, docsOf(records).map(function (d) { return d.id; }));
+  }
+
   root.Docs = {
     KEY: KEY, LIMIT: LIMIT, CAP: CAP, ASSET_VERSION: ASSET_VERSION, MAX: MAX, CATEGORIES: CATEGORIES,
     iconUrl: iconUrl, storageCardTitle: storageCardTitle, isStorageCardName: isStorageCardName,
     parseStorageIndex: parseStorageIndex, newId: newId, today: today,
     docRecord: docRecord, sigRecord: sigRecord, docsOf: docsOf, sigsOf: sigsOf, findSig: findSig, hasSigs: hasSigs,
+    bulletinRecord: bulletinRecord, ackRecord: ackRecord, bulletinsOf: bulletinsOf, acksOf: acksOf,
+    findAck: findAck, unackedBulletins: unackedBulletins,
     cleanRecords: cleanRecords, normalizeUrl: normalizeUrl,
     nameMatchesAdmin: nameMatchesAdmin, isAdmin: isAdmin,
     plan: plan, capacity: capacity, load: load, save: save, mutate: mutate,
     whoAmI: whoAmI, boardMembers: boardMembers,
-    needCardMessage: needCardMessage, missingMessage: missingMessage
+    needCardMessage: needCardMessage, missingMessage: missingMessage,
+    boardIdOf: boardIdOf, readSeen: readSeen, writeSeen: writeSeen,
+    wasAlerted: wasAlerted, markAlerted: markAlerted,
+    pendingDocs: pendingDocs, alertForMember: alertForMember, maybeAlert: maybeAlert,
+    rememberOpen: rememberOpen, actionCount: actionCount, buttonTextFor: buttonTextFor,
+    bulletinAlertMessage: bulletinAlertMessage
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.Docs;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
