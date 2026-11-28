@@ -653,6 +653,22 @@ function acknowledge(id, then, btn) {
   })).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
 }
 
+
+function queueSignalAnnouncement(item) {
+  function go(url, key) {
+    if (!url || !key || !item || !item.id) return;
+    var opts = {};
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') opts.sendBeacon = navigator.sendBeacon.bind(navigator);
+    if (typeof fetch === 'function') opts.fetch = fetch;
+    if (typeof Blob === 'function') opts.Blob = Blob;
+    Docs.postSignalAnnouncement(url, key, item, opts);
+  }
+  if (typeof OfficeCloud === 'undefined' || typeof OfficeCloud.getConfig !== 'function') return;
+  OfficeCloud.getConfig(t).then(function (cfg) {
+    if (cfg && OfficeCloud.isOn(cfg)) go(cfg.u, cfg.s);
+  }).catch(function () {});
+}
+
 function openBullForm(id) {
   if (!isAdmin()) return;
   bulletinEditId = id || null;
@@ -662,6 +678,8 @@ function openBullForm(id) {
   $('b-title').value = b ? b.title : '';
   $('b-msg').value = b ? b.message : '';
   $('b-url').value = b ? b.url : '';
+  if ($('b-send-signal-wrap')) $('b-send-signal-wrap').hidden = !!id;
+  if ($('b-send-signal')) $('b-send-signal').checked = true;
   text($('bull-form-error'), '');
   $('bull-form').querySelector('button[type=submit]').textContent = b ? 'Save' : 'Post';
   $('bull-form-overlay').hidden = false;
@@ -687,6 +705,8 @@ $('bull-form').addEventListener('submit', function (e) {
     url = u.url;
   }
   var id = bulletinEditId;
+  var sendToSignal = !id && (!$('b-send-signal') || $('b-send-signal').checked);
+  var queued = null;
   withDots(btn, Docs.mutate(t, function (recs) {
     if (id) {
       var at = -1;
@@ -698,14 +718,17 @@ $('bull-form').addEventListener('submit', function (e) {
         authorId: recs[at][7], authorName: recs[at][8], created: recs[at][9]
       });
     } else {
-      recs.push(Docs.bulletinRecord({
+      var rec = Docs.bulletinRecord({
         title: title, message: message, url: url, active: 1,
         authorId: me && me.id, authorName: me && me.name
-      }));
+      });
+      queued = { id: rec[1], title: rec[2], message: rec[3], url: rec[4] };
+      recs.push(rec);
     }
     return recs;
   }).then(function (s) {
     closeBullForm(); skipPop = false; popShown = false; refresh(s); toast(id ? 'Saved' : 'Announcement posted');
+    if (Docs.shouldQueueSignal(!id, sendToSignal) && queued) queueSignalAnnouncement(queued);
   })).catch(function (err) { text($('bull-form-error'), Docs.saveErrorMessage(err)); });
 });
 

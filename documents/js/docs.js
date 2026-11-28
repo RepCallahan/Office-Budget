@@ -29,7 +29,7 @@
   var LIMIT = 4096;          // Trello's per-scope cap
   var CAP = 3900;            // what we allow ourselves (leaves headroom for Trello's wrapper)
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128e';
+  var ASSET_VERSION = '20261128f';
   var MAX = { title: 80, url: 300, desc: 140, name: 60, message: 400 };
   var MAX_FULL_ANNOUNCEMENTS = 12; // newest + all still-active keep a full message body
   var TRIMMED_MESSAGE = 80;        // older ended announcements are shortened to this
@@ -846,6 +846,50 @@
     };
   }
 
+
+  function shouldQueueSignal(isNew, sendChecked) {
+    return !!(isNew && sendChecked);
+  }
+  function signalAnnouncementBody(key, item) {
+    return JSON.stringify({
+      mode: 'hubAnnouncement',
+      key: String(key || ''),
+      id: String(item && item.id || ''),
+      title: String(item && item.title || ''),
+      message: String(item && item.message || ''),
+      url: String(item && item.url || '')
+    });
+  }
+  function postSignalAnnouncement(url, key, item, opts) {
+    opts = opts || {};
+    url = String(url || '');
+    if (!url || !key || !item || !item.id) return false;
+    var body = signalAnnouncementBody(key, item);
+    try {
+      if (typeof opts.sendBeacon === 'function') {
+        var blob = typeof opts.Blob === 'function'
+          ? new opts.Blob([body], { type: 'text/plain;charset=utf-8' })
+          : body;
+        return !!opts.sendBeacon(url, blob);
+      }
+    } catch (e) {}
+    try {
+      if (typeof opts.fetch === 'function') {
+        opts.fetch(url, {
+          method: 'POST',
+          mode: 'no-cors',
+          credentials: 'omit',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: body,
+          keepalive: true
+        });
+        return true;
+      }
+    } catch (e2) {}
+    return false;
+  }
+
   root.Docs = {
     KEY: KEY, LIMIT: LIMIT, CAP: CAP, ASSET_VERSION: ASSET_VERSION, MAX: MAX, CATEGORIES: CATEGORIES,
     iconUrl: iconUrl, storageCardTitle: storageCardTitle, isStorageCardName: isStorageCardName,
@@ -872,6 +916,8 @@
     pendingDocs: pendingDocs, alertForMember: alertForMember, maybeAlert: maybeAlert,
     rememberOpen: rememberOpen, actionCount: actionCount, buttonTextFor: buttonTextFor,
     bulletinAlertMessage: bulletinAlertMessage, openBulletinModal: openBulletinModal,
+    shouldQueueSignal: shouldQueueSignal, signalAnnouncementBody: signalAnnouncementBody,
+    postSignalAnnouncement: postSignalAnnouncement,
     resetBulletinModalState: resetBulletinModalState, bulletinPopupUrl: bulletinPopupUrl
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.Docs;

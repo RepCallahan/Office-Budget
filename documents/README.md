@@ -2,7 +2,7 @@
 
 A free, private Trello Power-Up. It adds an **Office Hub** button to the board header. It opens a full-screen window where staff find office announcements first, then documents and memos (kept on Google Drive). Click **Open** to read a Google Drive file inside the app (with a Back button, a small Open in new tab link, and the Sign button if a signature is needed). Links that are not Google Drive files still open in a new tab.
 
-Version: `20261128e`
+Version: `20261128f`
 
 ## Google storage
 
@@ -11,7 +11,7 @@ Documents, signatures, and announcements now live in Google, inside the **Office
 This version needs a small update to that script so it also accepts Office Hub:
 
 1. Open the existing Office Budget Email project in [script.google.com](https://script.google.com).
-2. Replace the code with `/workspace/Office-Budget-Email-v3-Hub.txt` (or the copy you were sent). Email behavior is unchanged.
+2. Replace the code with `/workspace/Office-Budget-Email-v4-Signal.txt` (or the copy you were sent). Email behavior is unchanged.
 3. Deploy it as a **new version of the same deployment** (Deploy → Manage deployments → the existing Web app → Edit → Version: New version → Deploy). Do not create a new deployment, or the link would change.
 4. Open Office Budget once on this computer (so Office Hub can pick up the script link), then open Office Hub. The move happens automatically, with no buttons. If Settings still says data is on Trello, paste the same Apps Script link (the Webhook URL from Office Budget’s Settings) under **Google storage** and click **Save link**.
 
@@ -21,9 +21,9 @@ With Google storage, announcement history is kept in full (up to about 300,000 c
 
 ## Setup (about 5 minutes)
 
-1. **Upload to GitHub.** Unzip. You get one folder named `documents`. Open the **RepCallahan/Office-Budget** repository > **Add file > Upload files**, drag the whole `documents` folder in, and click **Commit changes**. (Your other apps are not touched.) Wait 1–2 minutes, then check that https://repcallahan.github.io/Office-Budget/documents/index.html?v=20261128e opens.
+1. **Upload to GitHub.** Unzip. You get one folder named `documents`. Open the **RepCallahan/Office-Budget** repository > **Add file > Upload files**, drag the whole `documents` folder in, and click **Commit changes**. (Your other apps are not touched.) Wait 1–2 minutes, then check that https://repcallahan.github.io/Office-Budget/documents/index.html?v=20261128f opens.
 2. **Create the Power-Up.** Go to https://trello.com/power-ups/admin and click **New**. Name it **Office Hub**, pick your workspace, and for **Iframe connector URL** paste:
-   `https://repcallahan.github.io/Office-Budget/documents/index.html?v=20261128e`
+   `https://repcallahan.github.io/Office-Budget/documents/index.html?v=20261128f`
 3. **Turn on the capability.** Open the **Capabilities** tab, turn on **board-buttons** only, and save.
 4. **Add it to the board.** Open the office board > **Power-Ups > Custom** > **Add** Office Hub. Click **Office Hub** in the board header.
 5. **Calvin opens it first.** Because his Trello name contains "Callahan", he is automatically set as the document admin on first open. (If it does not, go to Settings > **Make me the document admin**.)
@@ -62,7 +62,7 @@ The **Announcements** tab is the first page when you open Office Hub (unless you
 
 Posting an announcement is how a bulletin is made: each new one pops up for every board member (Wisconsin seal, the words **Office Bulletin**, the title, the message, an optional **Click here** link, and **Acknowledge**) until they acknowledge it. Acknowledged and ended announcements stay in the list as history. The admin can see who has acknowledged each one.
 
-A later Signal sender can pick up new announcements by their stable id and created timestamp. Office Hub does not send to Signal itself.
+When you post a new announcement, Office Hub can also queue it for the office Signal group (the “Also send to Signal” box, checked by default). Edits and ending an announcement do not send. The box relay posts the queued item with the Office Bulletin banner. Nothing is sent until the Apps Script and relay are in place.
 
 If the list grows long, the 12 most recent announcements (and any that are still active) keep their full message. Older ended announcements keep their title, author, date, id, and created time, but the message is shortened to about 80 characters so the board’s storage (about 3,900 characters per slot, then overflow onto Document Storage cards) does not fill up as quickly. A typical announcement plus acknowledgements from a small office is a few hundred characters; a long one with a link can approach 1,000.
 
@@ -84,4 +84,4 @@ Staff do not see each other's signatures in the app. That is hidden from view, n
 
 ## Updating later
 
-Replace the changed files in the `documents/` folder of the repository, change the version tag (`20261128e`) in `index.html`, `documents.html`, `bulletin-popup.html`, `js/docs.js`, `js/cloud.js`, `js/bulletin-popup.js`, and in the Power-Up's Iframe connector URL, and commit. If this version added Office Hub to the Apps Script, also paste Office-Budget-Email-v3-Hub.txt and deploy it as a new version of the same deployment.
+Replace the changed files in the `documents/` folder of the repository, change the version tag (`20261128f`) in `index.html`, `documents.html`, `bulletin-popup.html`, `js/docs.js`, `js/cloud.js`, `js/bulletin-popup.js`, and in the Power-Up's Iframe connector URL, and commit. If this version added Office Hub to the Apps Script, also paste Office-Budget-Email-v4-Signal.txt and deploy it as a new version of the same deployment.
