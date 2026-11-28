@@ -45,6 +45,50 @@ function kickPaint() {
   });
 }
 
+/* ---------- saving dots ----------
+ * While a save is on its way to Google, the clicked button shows three small
+ * animated dots, keeps its size, and is disabled so it cannot be pressed twice.
+ * The label comes back when the save finishes or fails (errors show as before).
+ */
+function submitBtn(event) {
+  var form = event && event.target;
+  return (event && event.submitter) || (form && form.querySelector ? form.querySelector('button[type="submit"]') : null);
+}
+
+function isBusy(btn) {
+  return !!(btn && btn.getAttribute('data-busy') === '1');
+}
+
+function withDots(btn, promise) {
+  if (!btn) return promise;
+  var label = btn.innerHTML;
+  var wasDisabled = btn.disabled;
+  var box = btn.getBoundingClientRect();
+  btn.setAttribute('data-busy', '1');
+  btn.setAttribute('aria-busy', 'true');
+  if (box.width) btn.style.width = box.width + 'px';
+  if (box.height) btn.style.height = box.height + 'px';
+  btn.classList.add('is-saving');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="saving-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="sr-only">Saving…</span>';
+  function done() {
+    btn.innerHTML = label;
+    btn.style.width = '';
+    btn.style.height = '';
+    btn.classList.remove('is-saving');
+    btn.removeAttribute('aria-busy');
+    btn.removeAttribute('data-busy');
+    btn.disabled = wasDisabled;
+    if (typeof afterSaveButton === 'function') afterSaveButton(btn);
+  }
+  return Promise.resolve(promise).then(function (v) { done(); return v; }, function (e) { done(); throw e; });
+}
+
+// Re-apply the normal enabled/disabled rules (e.g. Send update now needs a link).
+function afterSaveButton() {
+  if (currentBudget) renderSettings(currentBudget);
+}
+
 function showView(name) {
   viewSetup.hidden = name !== 'setup';
   viewBudget.hidden = name !== 'budget';
@@ -382,7 +426,7 @@ function appendPlanItem(host, row) {
     var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
     delBtn.appendChild(svgIcon('trash', 14));
     delBtn.appendChild(document.createTextNode('Delete'));
-    delBtn.addEventListener('click', function () { deletePlan(row); });
+    delBtn.addEventListener('click', function () { deletePlan(row, delBtn); });
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
   }
@@ -480,7 +524,7 @@ function renderPlan(budget) {
   if (saveBtn) saveBtn.disabled = !canWrite;
 }
 
-function deletePlan(row) {
+function deletePlan(row, btn) {
   if (!canWrite || !currentBudget) return;
   var track = BudgetSync.plannedTracking(currentBudget);
   var current = null;
@@ -490,7 +534,8 @@ function deletePlan(row) {
     ? '“' + row.name + '” has expenses totaling ' + BudgetSync.formatMoney(spent) + '. Delete this planned category? Those expenses will be kept and shown as unplanned under the name “' + row.name + '.”'
     : 'Delete the planned category “' + row.name + '”? This cannot be undone.';
   if (!window.confirm(message)) return;
-  store.load().then(function (budget) {
+  if (isBusy(btn)) return;
+  withDots(btn, store.load().then(function (budget) {
     if (!budget) return;
     return store.save(BudgetSync.deletePlannedCategory(budget, row.id)).then(function () {
       if (editingPlanId === row.id) resetPlanForm();
@@ -499,7 +544,7 @@ function deletePlan(row) {
   }).catch(function (e) {
     if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(e));
     else window.alert(errText(e, 'Could not delete that category. Please try again.'));
-  });
+  }));
 }
 
 function renderExpenseTable(wrap, list, emptyText) {
@@ -519,7 +564,7 @@ function renderExpenseTable(wrap, list, emptyText) {
       var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
       delBtn.appendChild(svgIcon('trash', 14));
       delBtn.appendChild(document.createTextNode('Delete'));
-      delBtn.addEventListener('click', function () { deleteExpense(item); });
+      delBtn.addEventListener('click', function () { deleteExpense(item, delBtn); });
       actions.appendChild(editBtn);
       actions.appendChild(delBtn);
     }
@@ -723,10 +768,11 @@ function hideLoader() {
   }, 400);
 }
 
-function deleteExpense(item) {
+function deleteExpense(item, btn) {
   if (!canWrite) return;
   if (!window.confirm('Delete “' + item.desc + '”? This cannot be undone.')) return;
-  store.load().then(function (budget) {
+  if (isBusy(btn)) return;
+  withDots(btn, store.load().then(function (budget) {
     if (!budget) return;
     return store.save(BudgetSync.deleteExpense(budget, item.id)).then(function () {
       if (editingId === item.id) resetExpenseForm();
@@ -736,7 +782,7 @@ function deleteExpense(item) {
     });
   }).catch(function (e) {
     window.alert(errText(e, 'Could not delete that expense. Please try again.'));
-  });
+  }));
 }
 
 document.getElementById('setup-form').addEventListener('submit', function (event) {
@@ -754,9 +800,10 @@ document.getElementById('setup-form').addEventListener('submit', function (event
     BudgetSync.showError(err, 'Enter an already-spent amount of zero or more.');
     return;
   }
-  store.save(BudgetSync.emptyBudget(total, starting)).then(refresh).catch(function (e) {
+  if (isBusy(submitBtn(event))) return;
+  withDots(submitBtn(event), store.save(BudgetSync.emptyBudget(total, starting)).then(refresh).catch(function (e) {
     BudgetSync.showError(err, errText(e, 'Could not save the budget. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('expense-form').addEventListener('submit', function (event) {
@@ -772,7 +819,8 @@ document.getElementById('expense-form').addEventListener('submit', function (eve
   if (catPacked === '') return BudgetSync.showError(err, 'Please choose a category.');
   if (!isFinite(amount) || amount <= 0) return BudgetSync.showError(err, 'Enter an amount greater than zero.');
 
-  store.load().then(function (budget) {
+  if (isBusy(submitBtn(event))) return;
+  withDots(submitBtn(event), store.load().then(function (budget) {
     if (!budget) throw new Error('NO_BUDGET');
     var expense = {
       id: editingId || BudgetSync.newId(),
@@ -794,7 +842,7 @@ document.getElementById('expense-form').addEventListener('submit', function (eve
       return;
     }
     BudgetSync.showError(err, errText(e, 'Could not save this expense. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('exp-cancel').addEventListener('click', resetExpenseForm);
@@ -802,7 +850,7 @@ document.getElementById('exp-cancel').addEventListener('click', resetExpenseForm
 document.getElementById('exp-delete').addEventListener('click', function () {
   if (!editingId || !currentBudget) return;
   var item = BudgetSync.findExpense(currentBudget, editingId);
-  if (item) deleteExpense(item);
+  if (item) deleteExpense(item, document.getElementById('exp-delete'));
 });
 
 document.getElementById('settings-form').addEventListener('submit', function (event) {
@@ -813,13 +861,14 @@ document.getElementById('settings-form').addEventListener('submit', function (ev
   var starting = BudgetSync.parseMoney(document.getElementById('set-starting').value);
   if (!isFinite(total) || total < 0) return BudgetSync.showError(err, 'Enter a biennium budget of zero or more.');
   if (!isFinite(starting) || starting < 0) return BudgetSync.showError(err, 'Enter an already-spent amount of zero or more.');
-  store.load().then(function (budget) {
+  if (isBusy(submitBtn(event))) return;
+  withDots(submitBtn(event), store.load().then(function (budget) {
     if (!budget) throw new Error('NO_BUDGET');
     return store.save(BudgetSync.withMeta(budget, { t: total, s: starting }));
   }).then(refresh).catch(function (e) {
     if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, errText(e, 'Could not save settings. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('rollup-btn').addEventListener('click', function () {
@@ -832,12 +881,13 @@ document.getElementById('rollup-btn').addEventListener('click', function () {
     'Spent will stay ' + BudgetSync.formatMoney(nextSpent) + '. This cannot be undone.'
   );
   if (!ok) return;
-  store.save(BudgetSync.rollUp(currentBudget)).then(function () {
+  if (isBusy(document.getElementById('rollup-btn'))) return;
+  withDots(document.getElementById('rollup-btn'), store.save(BudgetSync.rollUp(currentBudget)).then(function () {
     resetExpenseForm();
     return refresh();
   }).catch(function (e) {
     window.alert(errText(e, 'Could not roll up expenses. Please try again.'));
-  });
+  }));
 });
 
 function renderReport(budget) {
@@ -972,7 +1022,8 @@ document.getElementById('confirm-reset-btn').addEventListener('click', function 
     BudgetSync.formatDate(start) + '. Every category the office has made is kept — names, groups, and planned amounts. A reset never deletes categories. This cannot be undone.'
   );
   if (!ok) return;
-  store.save(BudgetSync.startNewPeriod(currentBudget)).then(function () {
+  if (isBusy(document.getElementById('confirm-reset-btn'))) return;
+  withDots(document.getElementById('confirm-reset-btn'), store.save(BudgetSync.startNewPeriod(currentBudget)).then(function () {
     resetExpenseForm();
     resetPlanForm();
     document.title = 'Office Budget';
@@ -980,17 +1031,18 @@ document.getElementById('confirm-reset-btn').addEventListener('click', function 
     return refresh();
   }).catch(function (e) {
     BudgetSync.showError(document.getElementById('report-error'), errText(e, 'Could not reset the budget. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('remove-btn').addEventListener('click', function () {
   if (!window.confirm('Remove the budget from this board? Expense history will be deleted.')) return;
-  store.remove().then(function () {
+  if (isBusy(document.getElementById('remove-btn'))) return;
+  withDots(document.getElementById('remove-btn'), store.remove().then(function () {
     resetExpenseForm();
     return refresh();
   }).catch(function (e) {
     window.alert(errText(e, 'Could not remove the budget. Please try again.'));
-  });
+  }));
 });
 
 
@@ -1017,7 +1069,8 @@ document.getElementById('plan-form').addEventListener('submit', function (event)
   var groupVal = document.getElementById('plan-group').value;
   if (!name) return BudgetSync.showError(err, 'Please enter a category name.');
   if (!isFinite(planned) || planned < 0) return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-  store.load().then(function (budget) {
+  if (isBusy(submitBtn(event))) return;
+  withDots(submitBtn(event), store.load().then(function (budget) {
     if (!budget) throw new Error('NO_BUDGET');
     return store.save(BudgetSync.upsertPlannedCategory(budget, {
       id: editingPlanId || '',
@@ -1034,7 +1087,7 @@ document.getElementById('plan-form').addEventListener('submit', function (event)
     if (e && e.code === 'AMOUNT') return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
     if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, errText(e, 'Could not save that category. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
@@ -1046,7 +1099,8 @@ document.getElementById('restore-cats-btn').addEventListener('click', function (
     'Restore the office categories? Existing categories are kept and not duplicated. For this session, starting spend is filled in only on categories that have no spending yet.'
   );
   if (!ok) return;
-  store.load().then(function (budget) {
+  if (isBusy(document.getElementById('restore-cats-btn'))) return;
+  withDots(document.getElementById('restore-cats-btn'), store.load().then(function (budget) {
     if (!budget) return;
     var restored = BudgetSync.ensureOfficeCategories(budget, { force: true });
     var relinked = BudgetSync.relinkExpenses(restored.budget);
@@ -1057,7 +1111,7 @@ document.getElementById('restore-cats-btn').addEventListener('click', function (
   }).catch(function (err) {
     if (err && (err.code === 'FULL' || err.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(err));
     else window.alert(errText(err, 'Could not restore the office categories. Please try again.'));
-  });
+  }));
 });
 
 
@@ -1066,7 +1120,8 @@ document.getElementById('webhook-form').addEventListener('submit', function (eve
   var err = document.getElementById('webhook-error');
   BudgetSync.showError(err, '');
   var url = document.getElementById('webhook-url').value;
-  store.load().then(function (budget) {
+  if (isBusy(submitBtn(event))) return;
+  withDots(submitBtn(event), store.load().then(function (budget) {
     if (!budget) throw new Error('NO_BUDGET');
     return store.save(BudgetSync.setWebhookUrl(budget, url)).then(function () {
       return store.linkChanged(url);
@@ -1076,7 +1131,7 @@ document.getElementById('webhook-form').addEventListener('submit', function (eve
     if (e && e.code === 'URL') return BudgetSync.showError(err, 'Enter a valid webhook URL.');
     if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
     BudgetSync.showError(err, errText(e, 'Could not save the webhook URL. Please try again.'));
-  });
+  }));
 });
 
 document.getElementById('webhook-send').addEventListener('click', function () {
@@ -1088,14 +1143,15 @@ document.getElementById('webhook-send').addEventListener('click', function () {
   var month = BudgetSync.chicagoYearMonth();
   var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName, 'email');
   var url = currentBudget.k;
-  BudgetSync.postWebhook(url, payload).then(function () {
+  if (isBusy(document.getElementById('webhook-send'))) return;
+  withDots(document.getElementById('webhook-send'), BudgetSync.postWebhook(url, payload).then(function () {
     webhookStatus = { at: Date.now(), ok: true, month: month, kind: 'email' };
     renderSettings(currentBudget);
   }).catch(function (e) {
     webhookStatus = { at: Date.now(), ok: false, kind: 'email' };
     BudgetSync.showError(err, 'The update could not be sent. Check the URL and try again.');
     renderSettings(currentBudget);
-  });
+  }));
 });
 
 

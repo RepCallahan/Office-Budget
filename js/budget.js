@@ -61,7 +61,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261128c';
+  var ASSET_VERSION = '20261128d';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
