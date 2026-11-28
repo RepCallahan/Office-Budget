@@ -13,7 +13,7 @@
  *     e: [[id, date, desc, cat, amount, by]],  // board copy is cleared after migration
  *     c: [[id, name, plannedCents, alreadyCents?, groupIndex?]],
  *     g: ["Spring Survey", ...],
- *     k: webhookUrl, m: lastAutoMonth, n: lastAttemptMs, o: lastOk, f: 1 if default categories were seeded,
+ *     k: webhookUrl, m: lastSnapshotMonth, n: lastAttemptMs, o: lastOk, f: 1 if default categories were seeded,
  *     h: ["cardId", ...] }
  * Expense "cat" values:
  *   - a number 0-22: legacy built-in state category (v2 data)
@@ -61,7 +61,7 @@
 
   // Bump this when uploading a new copy to GitHub Pages so Trello and the
   // browser fetch fresh HTML, JS, CSS, and icons instead of a cached copy.
-  var ASSET_VERSION = '20261127b';
+  var ASSET_VERSION = '20261127c';
 
   function publicBaseUrl() {
     var path = window.location.pathname || '/';
@@ -1572,6 +1572,25 @@
     return y + '-' + pad2(m);
   }
 
+  function isLeapYear(year) {
+    var y = Number(year);
+    return (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+  }
+
+  function lastDayOfMonth(year, month) {
+    var y = Number(year);
+    var m = Number(month);
+    var lengths = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (m === 2 && isLeapYear(y)) return 29;
+    if (m < 1 || m > 12) return 0;
+    return lengths[m];
+  }
+
+  function isLastDayOfMonth(year, month, day) {
+    var d = Number(day);
+    return d > 0 && d === lastDayOfMonth(year, month);
+  }
+
   function formatDateTimeChicago(ms) {
     var parts = chicagoParts(ms);
     return parts.month + '/' + parts.day + '/' + parts.year + ' ' + parts.hour + ':' + parts.minute + ' ' + (parts.dayPeriod || '') + ' CT';
@@ -1630,14 +1649,14 @@
     });
   }
 
-  function buildMonthlyPayload(budget, reportMonth, sentBy) {
+  function buildMonthlyPayload(budget, reportMonth, sentBy, mode) {
     var track = plannedTracking(budget);
     var spent = spentOf(budget);
     var left = leftOf(budget);
     var monthExpenses = expensesInMonth(budget, reportMonth);
     var monthTotal = 0;
     monthExpenses.forEach(function (item) { monthTotal += Number(item.amount) || 0; });
-    return {
+    var payload = {
       office: 'Callahan Office',
       generatedAt: new Date().toISOString(),
       reportMonth: reportMonth,
@@ -1678,6 +1697,8 @@
       expenseCountThisMonth: monthExpenses.length,
       sentBy: sentBy || ''
     };
+    if (mode) payload.mode = mode;
+    return payload;
   }
 
   function measurePlanCapacity(options) {
@@ -1793,6 +1814,9 @@
     groupClassFor: groupClassFor,
     chicagoYearMonth: chicagoYearMonth,
     previousYearMonth: previousYearMonth,
+    isLeapYear: isLeapYear,
+    lastDayOfMonth: lastDayOfMonth,
+    isLastDayOfMonth: isLastDayOfMonth,
     formatDateTimeChicago: formatDateTimeChicago,
     validateWebhookUrl: validateWebhookUrl,
     setWebhookUrl: setWebhookUrl,
@@ -1810,4 +1834,7 @@
     fullMessage: fullMessage,
     warnMessage: warnMessage
   };
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = root.BudgetSync;
+  }
 })(this);

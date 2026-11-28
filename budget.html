@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Office Budget</title>
-    <link rel="stylesheet" href="./css/app.css?v=20261127b">
-    <link rel="stylesheet" href="./css/report.css?v=20261127b">
+    <link rel="stylesheet" href="./css/app.css?v=20261127c">
+    <link rel="stylesheet" href="./css/report.css?v=20261127c">
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
   </head>
   <body>
@@ -34,7 +34,7 @@
       <div id="view-budget" class="view" hidden>
         <aside class="sidebar" aria-label="Budget sections">
           <div class="sidebar-brand">
-            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261127b" width="192" height="200" alt="Wisconsin state seal">
+            <img class="sidebar-logo" src="./img/wi-seal.png?v=20261127c" width="192" height="200" alt="Wisconsin state seal">
             <span class="sidebar-title">Rep. Callahan<span class="sidebar-break"></span> Office Budget</span>
           </div>
           <nav class="sidebar-nav">
@@ -287,7 +287,7 @@
               </form>
               <div class="more-divider"></div>
               <h3 class="subhead">Monthly update</h3>
-              <p class="hint">Once a month, send a snapshot of this budget to an Apps Script web app, which emails you a readable summary. Paste the web app URL (it should look like https://script.google.com/macros/s/…/exec). The first time you open Office Budget in a new month, a snapshot of the previous month is sent automatically.</p>
+              <p class="hint">Paste the Apps Script web app URL (it should look like https://script.google.com/macros/s/…/exec). Each time you open Office Budget — and after you add, edit, or delete an expense — a snapshot of the current month is saved. On the last day of the month, Apps Script emails that snapshot. Expenses entered after the last open will not be in the email until someone opens the app. Use Send update now to email the current month right away.</p>
               <form id="webhook-form">
                 <div class="field">
                   <label for="webhook-url">Webhook URL</label>
@@ -320,7 +320,7 @@
 
       </div>
     </div>
-    <script src="./js/budget.js?v=20261127b"></script>
-    <script src="./js/app.js?v=20261127b"></script>
+    <script src="./js/budget.js?v=20261127c"></script>
+    <script src="./js/app.js?v=20261127c"></script>
   </body>
 </html>

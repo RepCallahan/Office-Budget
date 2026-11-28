@@ -552,10 +552,9 @@ function renderSettings(budget) {
     else statusParts.push('Webhook saved.');
     if (budget.n) {
       var when = BudgetSync.formatDateTimeChicago(budget.n);
-      statusParts.push(budget.o ? ('Last sent ' + when + '.') : ('Last try failed ' + when + '. It will retry the next time Office Budget is opened.'));
+      statusParts.push(budget.o ? ('Last snapshot saved ' + when + '.') : ('Last snapshot try failed ' + when + '.'));
     }
-    if (budget.m) statusParts.push('Last automatic month: ' + budget.m + '.');
-    if (budget.k) statusParts.push('Apps Script responses cannot be read from Trello (the request is sent without CORS), so “sent” means the request left this browser without a network error.');
+    if (budget.k) statusParts.push('On the last day of the month, Apps Script emails the latest snapshot. Expenses entered after the last open will not be in that email until someone opens the app. Apps Script responses cannot be read from Trello (the request is sent without CORS), so “saved” means the request left this browser without a network error.');
     text(status, statusParts.join(' '));
   }
   var hookSave = document.getElementById('webhook-save');
@@ -583,32 +582,58 @@ function renderBudget(budget) {
   }
 }
 
-var autoSendTried = false;
+var snapshotTimer = null;
+var snapshotBusy = false;
+var snapshotAgain = false;
+var SNAPSHOT_DEBOUNCE_MS = 800;
 
-function maybeAutoSend(budget) {
-  if (autoSendTried || !budget || !budget.k) return Promise.resolve();
-  autoSendTried = true;
-  var prev = BudgetSync.previousYearMonth(BudgetSync.chicagoYearMonth());
-  if (budget.m === prev) return Promise.resolve();
-  var payload = BudgetSync.buildMonthlyPayload(budget, prev, currentMemberName);
-  return BudgetSync.postWebhook(budget.k, payload).then(function () {
-    return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: true, month: prev })).then(function () {
-      return BudgetSync.load(t).then(function (fresh) {
-        if (fresh) {
-          currentBudget = fresh;
-          renderSettings(fresh);
-        }
+function queueSnapshot() {
+  if (!currentBudget || !currentBudget.k) return;
+  if (snapshotTimer) clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(runSnapshot, SNAPSHOT_DEBOUNCE_MS);
+}
+
+function runSnapshot() {
+  snapshotTimer = null;
+  var budget = currentBudget;
+  if (!budget || !budget.k) return;
+  if (snapshotBusy) {
+    snapshotAgain = true;
+    return;
+  }
+  snapshotBusy = true;
+  var month = BudgetSync.chicagoYearMonth();
+  var payload = BudgetSync.buildMonthlyPayload(budget, month, currentMemberName, 'snapshot');
+  BudgetSync.postWebhook(budget.k, payload).then(function () {
+    return BudgetSync.load(t).then(function (fresh) {
+      if (!fresh) return;
+      return BudgetSync.save(t, BudgetSync.markWebhookResult(fresh, { ok: true, month: month })).then(function () {
+        return BudgetSync.load(t).then(function (updated) {
+          if (updated) {
+            currentBudget = updated;
+            renderSettings(updated);
+          }
+        });
       });
     });
   }).catch(function () {
-    return BudgetSync.save(t, BudgetSync.markWebhookResult(budget, { ok: false })).then(function () {
-      return BudgetSync.load(t).then(function (fresh) {
-        if (fresh) {
-          currentBudget = fresh;
-          renderSettings(fresh);
-        }
+    return BudgetSync.load(t).then(function (fresh) {
+      if (!fresh) return;
+      return BudgetSync.save(t, BudgetSync.markWebhookResult(fresh, { ok: false })).then(function () {
+        return BudgetSync.load(t).then(function (updated) {
+          if (updated) {
+            currentBudget = updated;
+            renderSettings(updated);
+          }
+        });
       });
     }).catch(function () { return null; });
+  }).then(function () {
+    snapshotBusy = false;
+    if (snapshotAgain) {
+      snapshotAgain = false;
+      queueSnapshot();
+    }
   });
 }
 
@@ -617,7 +642,8 @@ function showLoadedBudget(budget) {
   showView('budget');
   renderBudget(budget);
   showSection(currentSection);
-  return maybeAutoSend(budget);
+  queueSnapshot();
+  return Promise.resolve();
 }
 
 function showAppToast(message, kind) {
@@ -1020,7 +1046,7 @@ document.getElementById('webhook-send').addEventListener('click', function () {
     return BudgetSync.showError(err, 'Save a webhook URL first.');
   }
   var month = BudgetSync.chicagoYearMonth();
-  var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName);
+  var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName, 'email');
   var url = currentBudget.k;
   BudgetSync.postWebhook(url, payload).then(function () {
     return BudgetSync.load(t).then(function (budget) {
