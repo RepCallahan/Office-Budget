@@ -174,10 +174,22 @@ function renderList() {
   list.innerHTML = '';
   var shown = 0;
   data.forEach(function (r, i) {
-    if (q && (r[0] + ' ' + r[1] + ' ' + r[2]).toLowerCase().indexOf(q) === -1) return;
+    if (q && (r[0] + ' ' + r[1] + ' ' + r[2] + ' ' + (r[4] || '')).toLowerCase().indexOf(q) === -1) return;
     shown++;
     var left = el('div', { class: 'cell' }, [el('div', { class: 'e-name', text: r[0] })]);
     if (r[1]) left.appendChild(el('div', { class: 'e-sub', text: r[1] }));
+    if (r[4]) {
+      // Description: one line, cut off with … ; click to show the full text.
+      var desc = el('div', { class: 'e-desc', text: r[4], title: r[4], role: 'button', tabindex: '0', 'aria-expanded': 'false' });
+      var toggle = function () {
+        var open = desc.classList.toggle('is-open');
+        desc.setAttribute('aria-expanded', open ? 'true' : 'false');
+        resize();
+      };
+      desc.addEventListener('click', toggle);
+      desc.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      left.appendChild(desc);
+    }
 
     var userCell = cell('Username', [el('div', { class: 'val-row' }, [
       el('span', { class: 'val', text: r[2] || '—' }),
@@ -239,9 +251,10 @@ function setEye(show) {
 
 function openForm(i) {
   editIndex = i;
-  var r = i >= 0 ? data[i] : ['', '', '', ''];
+  var r = i >= 0 ? data[i] : ['', '', '', '', ''];
   text($('form-title'), i >= 0 ? 'Edit login' : 'Add login');
   $('f-name').value = r[0]; $('f-url').value = r[1]; $('f-user').value = r[2]; $('f-pass').value = r[3];
+  $('f-desc').value = r[4] || '';
   setEye(false);
   text($('form-error'), '');
   $('form-overlay').hidden = false;
@@ -265,7 +278,8 @@ $('login-form').addEventListener('submit', function (e) {
     $('f-name').value.trim().slice(0, M.name),
     Vault.stripScheme($('f-url').value).slice(0, M.url),
     $('f-user').value.trim().slice(0, M.user),
-    $('f-pass').value.slice(0, M.pass)
+    $('f-pass').value.slice(0, M.pass),
+    $('f-desc').value.trim().slice(0, M.desc)
   ];
   if (!row[0]) { text($('form-error'), 'Please enter a name.'); return; }
   var idx = editIndex;
@@ -314,6 +328,15 @@ document.addEventListener('keydown', function (e) {
   else if (!$('form-overlay').hidden) closeForm();
 });
 
+/* ---------- loading screen ---------- */
+// Fade out the inline loading screen once the first load has rendered (or failed).
+function hideLoader() {
+  var loader = $('app-loader');
+  if (!loader || loader.classList.contains('is-done')) return;
+  loader.classList.add('is-done');
+  setTimeout(function () { if (loader.parentNode) loader.parentNode.removeChild(loader); }, 400);
+}
+
 /* ---------- start ---------- */
 t.render(function () {
   canWrite = typeof t.memberCanWriteToModel === 'function' ? t.memberCanWriteToModel('board') : true;
@@ -322,7 +345,9 @@ t.render(function () {
     renderList();
     text($('ver'), Vault.ASSET_VERSION);
     if (!$('main').querySelector('[data-section-panel="settings"]').hidden) renderSettings();
+    hideLoader();
   }).catch(function (err) {
+    hideLoader();
     // Google could not be read: show a red message and keep the last list on
     // screen. Nothing is written to Trello as a fallback.
     $('banner').className = 'banner is-full';

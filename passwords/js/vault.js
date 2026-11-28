@@ -19,18 +19,20 @@
  * are migrated onto the storage cards on first open; "p" is then replaced
  * with the pointer.
  *
- * Stored shape (as compact as possible): an array of [name, url, username, password].
- *   [["Example","example.com","user","pass"], ...]
+ * Stored shape (as compact as possible): an array of [name, url, username, password, description?].
+ *   [["Example","example.com","user","pass"], ["Bank","bank.com","u","p","Office card"], ...]
+ * The description is optional (max 500 characters); rows without one stay four
+ * fields long, so older saved data reads unchanged.
  * No keys, ids or timestamps. URLs are saved without https://, www. and trailing slashes.
  * No encryption, by the office's choice: anyone with board access can read it.
- * No master password, notes, or categories.
+ * No master password or categories. One optional plain-text description per login.
  */
 (function (root) {
   var KEY = 'p';
   var LIMIT = 4096;
   var WARN_RATIO = 0.8;
-  var ASSET_VERSION = '20261128a';
-  var MAX = { name: 40, url: 80, user: 60, pass: 64 };
+  var ASSET_VERSION = '20261128b';
+  var MAX = { name: 40, url: 80, user: 60, pass: 64, desc: 500 };
   var STORAGE_NAME_RE = /^\s*password storage(?:\s+(\d+))?(?:\b.*)?$/i;
 
   function baseUrl() {
@@ -94,18 +96,22 @@
     var data = raw;
     if (typeof data === 'string') { try { data = JSON.parse(data); } catch (err) { data = null; } }
     if (isPointer(data)) return empty();
-    if (data && !Array.isArray(data) && Array.isArray(data.e)) data = data.e;
+    var legacyTest = false;
+    if (data && !Array.isArray(data) && Array.isArray(data.e)) { data = data.e; legacyTest = true; }
     if (!Array.isArray(data)) return empty();
     var out = [];
     data.forEach(function (r) {
-      if (Array.isArray(r)) out.push([r[0] || '', r[1] || '', r[2] || '', r[3] || '']);
+      if (!Array.isArray(r)) return;
+      // The old test format had a category in slot 5, so only plain arrays carry a description.
+      var desc = legacyTest ? '' : String(r[4] || '').slice(0, MAX.desc);
+      out.push([r[0] || '', r[1] || '', r[2] || '', r[3] || '', desc]);
     });
     return out;
   }
 
   function pack(data) {
     return (data || []).map(function (r) {
-      var row = r.slice(0, 4);
+      var row = r.slice(0, 5);
       while (row.length > 1 && row[row.length - 1] === '') row.pop();
       return row;
     });

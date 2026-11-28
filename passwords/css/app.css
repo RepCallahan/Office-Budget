@@ -74,7 +74,7 @@ button { font: inherit; }
 .ghost:hover { border-color: var(--faint); }
 .danger { background: var(--red); color: #fff; }
 .danger:hover { filter: brightness(.92); }
-input[type=text], input[type=search], input[type=password] {
+input[type=text], input[type=search], input[type=password], textarea {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius-sm); padding: 9px 12px; width: 100%; min-width: 0; outline: none;
   transition: border-color var(--ease), box-shadow var(--ease);
@@ -159,3 +159,9 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-so
 .cloud-form .field { flex: 1 1 auto; }
 .cloud-form input { width: 100%; }
 #cloud-error { margin-top: 8px; }
+
+/* Optional description under the login name */
+textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
+.e-desc { color: var(--muted); font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.e-desc.is-open { white-space: pre-wrap; overflow-wrap: anywhere; }
+.e-desc:focus-visible { outline: 2px solid var(--accent-soft); border-radius: 4px; }
