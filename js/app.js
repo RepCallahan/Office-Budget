@@ -1,64 +1,39 @@
-/* global TrelloPowerUp, BudgetSync */
-
+/* global TrelloPowerUp, Docs */
+'use strict';
 var t = TrelloPowerUp.iframe();
-var currentBudget = null;
-var editingId = null;
-var originalBy = '';
-var currentMemberName = 'you';
+
+var state = null;      // { records, admin, cardIds, ... }
+var me = null;         // { id, name, username } or null
+var members = [];      // board members (used for the admin's "not yet signed" list)
 var canWrite = true;
+var store = Docs.createStore(t, {
+  canWrite: function () { return canWrite; },
+  link: function () { return (typeof OfficeCloud !== 'undefined' && OfficeCloud.rememberedUrl) ? OfficeCloud.rememberedUrl() : ''; }
+});
+var query = '';
+var catFilter = '';
+var editId = null;     // id of document being edited, or null when adding
+var signId = null;     // id of document being signed
+var deleteId = null;
+var confirmKind = 'doc'; // 'doc' | 'ann'
+var viewId = null;     // id of document open in the in-app viewer
+var toastTimer = null;
 
-var viewSetup = document.getElementById('view-setup');
-var viewBudget = document.getElementById('view-budget');
-var currentSection = 'overview';
-
-BudgetSync.applyTheme(t);
-
-// Reads and saves go through the store: Google storage once this board has been
-// moved (automatically, on first open), Trello until then.
-var store = BudgetSync.createStore(t, { canWrite: function () { return canWrite; } });
-
-// Google problems get their own clear message; everything else keeps the old text.
-function errText(e, fallback) {
-  return e && e.cloud ? BudgetSync.saveErrorMessage(e) : fallback;
+function $(id) { return document.getElementById(id); }
+function text(el, s) { el.textContent = s == null ? '' : String(s); return el; }
+function el(tag, cls, s) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (s != null) n.textContent = s;
+  return n;
 }
+function isAdmin() { return Docs.isAdmin(me, state && state.admin); }
 
-function showCloudError(e) {
-  var box = document.getElementById('cloud-error');
-  if (!box) return;
-  box.hidden = !e;
-  text(box, !e ? '' : (e.cloud ? BudgetSync.saveErrorMessage(e) : 'Could not load the budget. Close and reopen Office Budget.'));
-}
-
-// Fullscreen t.modal iframes are already sized by Trello. t.sizeTo() here can
-// collapse the iframe to 0 height in Safari when 100%/100dvh is measured too
-// early, leaving a blank window until a click. Force a reflow/paint instead.
-function kickPaint() {
-  var root = document.documentElement;
-  var body = document.body;
-  if (!root || !body) return;
-  void root.offsetWidth;
-  requestAnimationFrame(function () {
-    void body.offsetHeight;
-    requestAnimationFrame(function () {
-      void body.offsetHeight;
-    });
-  });
-}
-
-/* ---------- saving dots ----------
- * While a save is on its way to Google, the clicked button shows three small
- * animated dots, keeps its size, and is disabled so it cannot be pressed twice.
- * The label comes back when the save finishes or fails (errors show as before).
- */
 function submitBtn(event) {
   var form = event && event.target;
   return (event && event.submitter) || (form && form.querySelector ? form.querySelector('button[type="submit"]') : null);
 }
-
-function isBusy(btn) {
-  return !!(btn && btn.getAttribute('data-busy') === '1');
-}
-
+function isBusy(btn) { return !!(btn && btn.getAttribute('data-busy') === '1'); }
 function withDots(btn, promise) {
   if (!btn) return promise;
   var label = btn.innerHTML;
@@ -79,1093 +54,826 @@ function withDots(btn, promise) {
     btn.removeAttribute('aria-busy');
     btn.removeAttribute('data-busy');
     btn.disabled = wasDisabled;
-    if (typeof afterSaveButton === 'function') afterSaveButton(btn);
   }
   return Promise.resolve(promise).then(function (v) { done(); return v; }, function (e) { done(); throw e; });
 }
-
-// Re-apply the normal enabled/disabled rules (e.g. Send update now needs a link).
-function afterSaveButton() {
-  if (currentBudget) renderSettings(currentBudget);
-}
-
-function showView(name) {
-  viewSetup.hidden = name !== 'setup';
-  viewBudget.hidden = name !== 'budget';
-  kickPaint();
-}
-
-function placeExpenseForm(section) {
-  var panel = document.getElementById('expense-panel');
-  var slot = document.getElementById(section === 'expenses' ? 'form-slot-expenses' : 'form-slot-overview');
-  if (panel && slot && panel.parentNode !== slot) slot.appendChild(panel);
-}
-
-function showSection(name) {
-  var allowed = { overview: true, budget: true, expenses: true, categories: true, reports: true, settings: true };
-  if (!allowed[name]) name = 'overview';
-  currentSection = name;
-  document.querySelectorAll('.nav-btn[data-section]').forEach(function (btn) {
-    var on = btn.getAttribute('data-section') === name;
-    btn.classList.toggle('is-active', on);
-    if (on) btn.setAttribute('aria-current', 'page');
-    else btn.removeAttribute('aria-current');
-  });
-  document.querySelectorAll('.app-section').forEach(function (section) {
-    section.hidden = section.getAttribute('data-section-panel') !== name;
-    section.classList.toggle('is-active', !section.hidden);
-  });
-  if (name === 'overview' || name === 'expenses') placeExpenseForm(name);
-  if (name === 'reports' && currentBudget) renderReport(currentBudget);
-  kickPaint();
-}
-
-function text(node, value) {
-  if (node) node.textContent = value == null ? '' : String(value);
-}
-
-function moneyReport(value) {
-  var num = Number(value);
-  if (!isFinite(num)) num = 0;
-  var negative = num < 0;
-  var formatted = Math.abs(num).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
-  return (negative ? '-$' : '$') + formatted;
-}
-
-function longDate(iso) {
-  if (!iso) return '';
-  var parts = String(iso).split('-');
-  if (parts.length !== 3) return String(iso);
-  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  var m = parseInt(parts[1], 10);
-  var d = parseInt(parts[2], 10);
-  if (!m || m < 1 || m > 12) return String(iso);
-  return months[m - 1] + ' ' + d + ', ' + parts[0];
-}
-
-function generatedStamp() {
-  var d = new Date();
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) +
-    ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-
-function el(tag, attrs, children) {
-  var node = document.createElement(tag);
-  if (attrs) {
-    Object.keys(attrs).forEach(function (key) {
-      if (key === 'className') node.className = attrs[key];
-      else if (key === 'text') node.textContent = attrs[key];
-      else node.setAttribute(key, attrs[key]);
-    });
-  }
-  (children || []).forEach(function (child) {
-    if (child == null || child === '') return;
-    node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
-  });
-  return node;
-}
-
-var expOther = document.getElementById('exp-other');
-var editingPlanId = null;
-
-function packedFromForm(value) {
-  var catVal = String(value || '');
-  if (!catVal) return '';
-  if (catVal === BudgetSync.UNPLANNED || BudgetSync.isCustomPacked(catVal)) return catVal;
-  if (/^\d+$/.test(catVal)) {
-    var n = parseInt(catVal, 10);
-    if (n >= 0 && n < BudgetSync.CATEGORIES.length) return n;
-  }
-  return catVal;
-}
-
-function fillCategorySelect(budget, selectedPacked) {
-  var select = document.getElementById('exp-category');
-  if (!select) return;
-  var current = selectedPacked;
-  if (current === undefined || current === null) current = packedFromForm(select.value);
-  select.textContent = '';
-  select.appendChild(el('option', { value: '', text: 'Choose a category' }));
-  var planned = BudgetSync.sortPlanned((budget && budget.c) || []);
-  planned.forEach(function (cat) {
-    select.appendChild(el('option', { value: BudgetSync.packCustomId(cat.id), text: cat.name }));
-  });
-  select.appendChild(el('option', { value: BudgetSync.UNPLANNED, text: 'Other / Unplanned' }));
-  var linked = (current !== '' && current != null) ? BudgetSync.resolvePlannedCategory(current, budget) : null;
-  if (linked) current = BudgetSync.packCustomId(linked.id);
-  if (current !== '' && current != null && current !== BudgetSync.UNPLANNED && !BudgetSync.isCustomPacked(current)) {
-    var label = BudgetSync.categoryLabel(current, budget) || String(current);
-    select.appendChild(el('option', { value: String(current), text: label + ' (from earlier expenses)' }));
-  } else if (BudgetSync.isCustomPacked(current) && !BudgetSync.findPlanned(budget, BudgetSync.customIdFromPacked(current))) {
-    select.appendChild(el('option', { value: String(current), text: (BudgetSync.categoryLabel(current, budget) || 'Category') + ' (from earlier expenses)' }));
-  }
-  if (current !== '' && current != null) select.value = String(current);
-  if (expOther) {
-    expOther.hidden = true;
-    expOther.value = '';
-  }
-}
-
-function svgIcon(name, size) {
-  var paths = {
-    plus: 'M12 5v14M5 12h14',
-    edit: 'M4 20h4l10.5-10.5a2.12 2.12 0 0 0-3-3L5 17v3zM13.5 6.5l4 4',
-    trash: 'M4 7h16M9 7V5h6v2M8 7l1 12h6l1-12'
-  };
-  var ns = 'http://www.w3.org/2000/svg';
-  var svg = document.createElementNS(ns, 'svg');
-  var dim = String(size || 16);
-  svg.setAttribute('width', dim);
-  svg.setAttribute('height', dim);
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.75');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-  var d = paths[name] || paths.plus;
-  var path = document.createElementNS(ns, 'path');
-  path.setAttribute('d', d);
-  svg.appendChild(path);
-  return svg;
-}
-
-function setFormHeading(label, kind) {
-  var heading = document.getElementById('form-heading');
-  heading.textContent = '';
-  heading.appendChild(svgIcon(kind === 'edit' ? 'edit' : 'plus', 16));
-  heading.appendChild(document.createTextNode(label));
-}
-
-function resetExpenseForm() {
-  editingId = null;
-  originalBy = '';
-  setFormHeading('Add expense', 'plus');
-  document.getElementById('expense-form').reset();
-  document.getElementById('exp-date').value = BudgetSync.todayISO();
-  fillCategorySelect(currentBudget, '');
-  document.getElementById('exp-cancel').hidden = true;
-  document.getElementById('exp-delete').hidden = true;
-  document.getElementById('exp-save').textContent = 'Save expense';
-  text(document.getElementById('exp-by'), currentMemberName);
-  BudgetSync.showError(document.getElementById('exp-error'), '');
-}
-
-function startEdit(item) {
-  editingId = item.id;
-  originalBy = item.by || '';
-  setFormHeading('Edit expense', 'edit');
-  document.getElementById('exp-date').value = item.date;
-  document.getElementById('exp-desc').value = item.desc;
-  document.getElementById('exp-amount').value = item.amount;
-  fillCategorySelect(currentBudget, item.catPacked != null && item.catPacked !== '' ? item.catPacked : BudgetSync.packCategory(item));
-  document.getElementById('exp-cancel').hidden = false;
-  document.getElementById('exp-delete').hidden = false;
-  document.getElementById('exp-save').textContent = 'Save changes';
-  text(document.getElementById('exp-by'), originalBy || currentMemberName);
-  BudgetSync.showError(document.getElementById('exp-error'), '');
-  document.getElementById('expense-form').scrollIntoView({ block: 'nearest' });
-}
-
-function renderBanners(budget) {
-  var box = document.getElementById('banners');
-  box.textContent = '';
-  var left = BudgetSync.leftOf(budget);
-  var info = BudgetSync.storageInfo(budget);
-  if (left < 0) {
-    box.appendChild(el('div', { className: 'banner banner-over', text: 'Overspent by ' + BudgetSync.formatMoney(Math.abs(left)) + '.' }));
-  }
-  if (info.needCard) box.appendChild(el('div', { className: 'banner banner-over', text: BudgetSync.needCardMessage(info.nextTitle) }));
-  else if (info.full) box.appendChild(el('div', { className: 'banner banner-over', text: BudgetSync.fullMessage() }));
-  else if (info.needSetup) box.appendChild(el('div', { className: 'banner banner-warn', text: BudgetSync.setupCardMessage() }));
-  else if (info.warn) box.appendChild(el('div', { className: 'banner banner-warn', text: BudgetSync.warnMessage(info) }));
-  if (info.cloudError) {
-    box.appendChild(el('div', { className: 'banner banner-over', text: 'Office Budget could not move to Google storage yet, so it is still using Trello and works as before. ' + BudgetSync.saveErrorMessage(info.cloudError) }));
-  }
-  if (info.missing && info.missing.length) {
-    box.appendChild(el('div', { className: 'banner banner-warn', text: 'A Budget Storage card could not be read. If you archived it, that is okay. If expenses are missing, open Menu → Archived items, send the “Budget Storage” card back to the board, and reopen Office Budget. Do not delete those cards.' }));
-  }
-}
-
-function renderSummary(budget) {
-  var spent = BudgetSync.spentOf(budget);
-  var left = BudgetSync.leftOf(budget);
-  var over = left < 0;
-  var remainPct = BudgetSync.percentRemaining(budget);
-  var usedPct = (Number(budget.t) || 0) > 0 ? Math.round((spent / budget.t) * 100) : 0;
-  text(document.getElementById('hero-left'), BudgetSync.formatMoney(left));
-  text(document.getElementById('hero-spent'), BudgetSync.formatMoney(spent));
-  text(document.getElementById('hero-remain'), remainPct + '%');
-  text(document.getElementById('hero-total'), BudgetSync.formatMoney(budget.t));
-  text(document.getElementById('hero-period'), BudgetSync.formatPeriod(budget.p).replace(/^Period:\s*/, ''));
-  var leftMetric = document.getElementById('hero-left').closest('.metric');
-  var remainMetric = document.getElementById('hero-remain').closest('.metric');
-  if (leftMetric) leftMetric.className = 'metric' + (over ? ' is-over' : '');
-  if (remainMetric) remainMetric.className = 'metric' + (over ? ' is-over' : '');
-  var bar = document.getElementById('hero-bar');
-  var nearLimit = over || usedPct >= 90;
-  bar.className = 'used-bar' + (nearLimit ? (over ? ' is-over' : ' is-warn') : '');
-  bar.style.width = Math.max(0, Math.min(100, over ? 100 : usedPct)) + '%';
-  var usedLabel = document.getElementById('hero-used');
-  usedLabel.className = 'used-label' + (nearLimit ? (over ? ' is-over' : ' is-warn') : '');
-  text(usedLabel, (over ? usedPct : Math.max(0, usedPct)) + '% used');
-  var starting = BudgetSync.effectiveStartingOf(budget);
-  var logged = BudgetSync.loggedSpentOf(budget);
-  var sub = document.getElementById('expense-sub');
-  if (starting && logged) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' already spent, plus ' + BudgetSync.formatMoney(logged) + ' logged here.');
-  else if (starting) text(sub, 'Includes ' + BudgetSync.formatMoney(starting) + ' already spent.');
-  else if (logged) text(sub, BudgetSync.formatMoney(logged) + ' logged here.');
-  else text(sub, 'No spending logged yet.');
-  text(document.getElementById('expense-heading'), budget.e.length === 1 ? '1 expense' : budget.e.length + ' expenses');
-}
-
-function renderSpendList(host, rows, emptyText) {
-  if (!rows.length) {
-    host.appendChild(el('p', { className: 'empty-table', text: emptyText }));
-    return;
-  }
-  var max = 0;
-  rows.forEach(function (row) {
-    if (row.amount > max) max = row.amount;
-  });
-  var ul = el('ul', { className: 'cat-totals' });
-  rows.forEach(function (row) {
-    var width = max > 0 ? Math.max(2, Math.round((row.amount / max) * 100)) : 0;
-    var bar = el('div', { className: 'cat-bar' });
-    bar.style.width = width + '%';
-    ul.appendChild(el('li', null, [
-      el('div', { className: 'cat-row' }, [
-        el('span', { className: 'cat-name', text: row.label }),
-        el('span', { className: 'cat-amount', text: BudgetSync.formatMoney(row.amount) })
-      ]),
-      el('div', { className: 'cat-track' }, [bar])
-    ]));
-  });
-  host.appendChild(ul);
-}
-
-function renderCategories(budget) {
-  var host = document.getElementById('category-totals');
-  host.textContent = '';
-  var track = BudgetSync.plannedTracking(budget);
-  var plannedSpend = track.categories.filter(function (row) { return row.spent > 0; }).map(function (row) {
-    return { label: row.name, amount: row.spent };
-  });
-  var hasPlanned = track.categories.length > 0;
-  if (!plannedSpend.length && !track.unplannedGroups.length) {
-    host.appendChild(el('p', { className: 'empty-table', text: 'No category spending to show yet.' }));
-  } else if (hasPlanned) {
-    var plannedBox = el('div', { className: 'cat-group' }, [el('h3', { text: 'Planned categories' })]);
-    renderSpendList(plannedBox, plannedSpend, 'No spending has been logged against a planned category yet.');
-    host.appendChild(plannedBox);
-    var unplannedBox = el('div', { className: 'cat-group' }, [el('h3', { text: 'Unplanned' })]);
-    renderSpendList(unplannedBox, track.unplannedGroups, 'No unplanned expenses this period.');
-    host.appendChild(unplannedBox);
-  } else {
-    renderSpendList(host, BudgetSync.categoryTotals(budget), 'No categorized expenses yet.');
-  }
-  var go = el('button', { className: 'ghost-btn go-budget', type: 'button', text: 'Go to Budget to plan amounts' });
-  go.addEventListener('click', function () { showSection('budget'); });
-  host.appendChild(go);
-}
-
-function fillGroupSelect(budget, selected) {
-  var sel = document.getElementById('plan-group');
-  if (!sel) return;
-  var groups = (budget && budget.g && budget.g.length) ? budget.g.slice() : [];
-  sel.textContent = '';
-  sel.appendChild(el('option', { value: '', text: 'No group' }));
-  groups.forEach(function (name, i) {
-    var opt = el('option', { value: String(i), text: name });
-    if (selected != null && String(selected) === String(i)) opt.selected = true;
-    sel.appendChild(opt);
-  });
-}
-
-function resetPlanForm() {
-  editingPlanId = null;
-  text(document.getElementById('plan-form-heading'), 'Add category');
-  var form = document.getElementById('plan-form');
-  if (form) form.reset();
-  fillGroupSelect(currentBudget, '');
-  document.getElementById('plan-cancel').hidden = true;
-  document.getElementById('plan-save').textContent = 'Save category';
-  BudgetSync.showError(document.getElementById('plan-error'), '');
-}
-
-function startEditPlan(row) {
-  editingPlanId = row.id;
-  text(document.getElementById('plan-form-heading'), 'Edit category');
-  document.getElementById('plan-name').value = row.name;
-  document.getElementById('plan-amount').value = row.planned;
-  fillGroupSelect(currentBudget, row.group);
-  document.getElementById('plan-cancel').hidden = false;
-  document.getElementById('plan-save').textContent = 'Save changes';
-  BudgetSync.showError(document.getElementById('plan-error'), '');
-  document.getElementById('plan-form').scrollIntoView({ block: 'nearest' });
-}
-
-function planUsedLabel(row) {
-  if (row.status === 'none') {
-    return row.spent ? 'No planned amount set' : 'No plan set';
-  }
-  return row.usedPct + '% used';
-}
-
-function appendPlanItem(host, row) {
-  var actions = el('div', { className: 'actions' });
-  if (canWrite) {
-    var editBtn = el('button', { className: 'row-btn', type: 'button', 'aria-label': 'Edit' });
-    editBtn.appendChild(svgIcon('edit', 14));
-    editBtn.appendChild(document.createTextNode('Edit'));
-    editBtn.addEventListener('click', function () { startEditPlan(row); });
-    var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
-    delBtn.appendChild(svgIcon('trash', 14));
-    delBtn.appendChild(document.createTextNode('Delete'));
-    delBtn.addEventListener('click', function () { deletePlan(row, delBtn); });
-    actions.appendChild(editBtn);
-    actions.appendChild(delBtn);
-  }
-  var width = row.status === 'none' ? 0 : Math.max(0, Math.min(100, row.usedPct));
-  if (row.status === 'over') width = 100;
-  var bar = el('div', { className: 'plan-bar is-' + row.status });
-  bar.style.width = width + '%';
-  var leftClass = row.status === 'none' ? '' : (row.left < 0 ? 'is-over' : (row.status === 'ok' ? 'is-ok' : ''));
-  var leftText = row.status === 'none' ? '—' : BudgetSync.formatMoney(row.left);
-  var children = [
-    el('div', { className: 'plan-item-head' }, [
-      el('div', { className: 'plan-item-name', text: row.name }),
-      actions
-    ]),
-    el('div', { className: 'plan-item-stats' }, [
-      el('span', null, ['Planned ', el('strong', { text: BudgetSync.formatMoney(row.planned) })]),
-      el('span', null, ['Spent ', el('strong', { text: BudgetSync.formatMoney(row.spent) })]),
-      el('span', null, ['Left ', el('strong', { className: leftClass, text: leftText })])
-    ])
-  ];
-  children.push(el('div', { className: 'plan-track' }, [bar]));
-  children.push(el('div', { className: 'plan-used is-' + row.status, text: planUsedLabel(row) }));
-  host.appendChild(el('div', { className: 'plan-item' }, children));
-}
-
-function renderPlan(budget) {
-  var track = BudgetSync.plannedTracking(budget);
-  text(document.getElementById('plan-biennium'), BudgetSync.formatMoney(track.biennium));
-  text(document.getElementById('plan-total'), BudgetSync.formatMoney(track.totalPlanned));
-  var unalloc = document.getElementById('plan-unallocated');
-  text(unalloc, BudgetSync.formatMoney(track.unallocated));
-  unalloc.className = 'metric-value pill ' + (track.overPlanned ? 'pill-red is-over' : 'pill-green');
-  var warn = document.getElementById('plan-warn');
-  if (track.overPlanned) {
-    warn.hidden = false;
-    text(warn, 'Planned categories add up to ' + BudgetSync.formatMoney(track.totalPlanned) + ', which is ' + BudgetSync.formatMoney(Math.abs(track.unallocated)) + ' more than the biennium budget.');
-  } else {
-    warn.hidden = true;
-    text(warn, '');
-  }
-  text(document.getElementById('plan-note'), 'Unallocated is the biennium budget minus your planned amounts.');
-
-  var list = document.getElementById('plan-list');
-  list.textContent = '';
-  if (!track.categories.length) {
-    list.appendChild(el('div', { className: 'empty-table', text: 'No categories yet. Add one on the right.' }));
-  } else {
-    var i = 0;
-    while (i < track.categories.length) {
-      var row = track.categories[i];
-      if (row.group >= 0 && row.groupName) {
-        var groupIndex = row.group;
-        var groupName = row.groupName;
-        var groupBox = el('div', { className: 'plan-group' });
-        var plannedSum = 0;
-        var spentSum = 0;
-        var items = [];
-        while (i < track.categories.length && track.categories[i].group === groupIndex && track.categories[i].groupName === groupName) {
-          plannedSum += track.categories[i].planned;
-          spentSum += track.categories[i].spent;
-          items.push(track.categories[i]);
-          i += 1;
-        }
-        var sub = BudgetSync.formatMoney(spentSum) + ' spent';
-        if (plannedSum) sub = BudgetSync.formatMoney(spentSum) + ' of ' + BudgetSync.formatMoney(plannedSum);
-        groupBox.appendChild(el('div', { className: 'plan-group-head' }, [
-          el('span', { text: groupName }),
-          el('span', { className: 'subtotal', text: sub })
-        ]));
-        items.forEach(function (item) { appendPlanItem(groupBox, item); });
-        list.appendChild(groupBox);
-      } else {
-        appendPlanItem(list, row);
-        i += 1;
-      }
-    }
-  }
-
-  var unplanned = document.getElementById('plan-unplanned');
-  unplanned.textContent = '';
-  if (!track.unplannedSpent) {
-    unplanned.appendChild(el('p', { className: 'hint', text: 'No unplanned expenses this period. New expenses can use Other / Unplanned, and older state-report categories stay listed here.' }));
-  } else {
-    var unplannedHint = BudgetSync.formatMoney(track.unplannedSpent) + ' without a planned amount.';
-    if (track.unitemized) {
-      unplannedHint = BudgetSync.formatMoney(track.unitemized) + ' is Other / unitemized — the part of already-spent not assigned to a category.';
-      if (track.unplannedLogged) unplannedHint += ' Another ' + BudgetSync.formatMoney(track.unplannedLogged) + ' was logged without a planned category.';
-    }
-    unplanned.appendChild(el('p', { className: 'hint', text: unplannedHint }));
-    renderSpendList(unplanned, track.unplannedGroups, '');
-  }
-
-  fillGroupSelect(budget, editingPlanId ? document.getElementById('plan-group').value : '');
-  var saveBtn = document.getElementById('plan-save');
-  if (saveBtn) saveBtn.disabled = !canWrite;
-}
-
-function deletePlan(row, btn) {
-  if (!canWrite || !currentBudget) return;
-  var track = BudgetSync.plannedTracking(currentBudget);
-  var current = null;
-  track.categories.forEach(function (item) { if (item.id === row.id) current = item; });
-  var spent = current ? current.spent : 0;
-  var message = spent
-    ? '“' + row.name + '” has expenses totaling ' + BudgetSync.formatMoney(spent) + '. Delete this planned category? Those expenses will be kept and shown as unplanned under the name “' + row.name + '.”'
-    : 'Delete the planned category “' + row.name + '”? This cannot be undone.';
-  if (!window.confirm(message)) return;
-  if (isBusy(btn)) return;
-  withDots(btn, store.load().then(function (budget) {
-    if (!budget) return;
-    return store.save(BudgetSync.deletePlannedCategory(budget, row.id)).then(function () {
-      if (editingPlanId === row.id) resetPlanForm();
-      return refresh();
-    });
-  }).catch(function (e) {
-    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(e));
-    else window.alert(errText(e, 'Could not delete that category. Please try again.'));
-  }));
-}
-
-function renderExpenseTable(wrap, list, emptyText) {
-  wrap.textContent = '';
-  if (!list.length) {
-    wrap.appendChild(el('div', { className: 'empty-table', text: emptyText }));
-    return;
-  }
-  var body = el('tbody');
-  list.forEach(function (item) {
-    var actions = el('td', { className: 'actions' });
-    if (canWrite) {
-      var editBtn = el('button', { className: 'row-btn', type: 'button', 'aria-label': 'Edit' });
-      editBtn.appendChild(svgIcon('edit', 14));
-      editBtn.appendChild(document.createTextNode('Edit'));
-      editBtn.addEventListener('click', function () { startEdit(item); });
-      var delBtn = el('button', { className: 'row-btn danger', type: 'button', 'aria-label': 'Delete' });
-      delBtn.appendChild(svgIcon('trash', 14));
-      delBtn.appendChild(document.createTextNode('Delete'));
-      delBtn.addEventListener('click', function () { deleteExpense(item, delBtn); });
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
-    }
-    body.appendChild(el('tr', null, [
-      el('td', { text: BudgetSync.formatDate(item.date) }),
-      el('td', { text: item.desc || '' }),
-      el('td', { text: item.cat || '' }),
-      el('td', { className: 'num', text: BudgetSync.formatMoney(item.amount) }),
-      el('td', { text: item.by || '' }),
-      actions
-    ]));
-  });
-  wrap.appendChild(el('table', { className: 'expenses' }, [
-    el('thead', null, [el('tr', null, [
-      el('th', { text: 'Date' }),
-      el('th', { text: 'Description' }),
-      el('th', { text: 'Category' }),
-      el('th', { className: 'num', text: 'Amount' }),
-      el('th', { text: 'Entered by' }),
-      el('th', { text: '' })
-    ])]),
-    body
-  ]));
-}
-
-function renderExpenses(budget) {
-  var wrap = document.getElementById('expense-table-wrap');
-  var list = BudgetSync.sortExpenses(budget.e);
-  renderExpenseTable(wrap, list, 'No expenses logged in this period yet. Use the form on the right to add the first one.');
-}
-
-function renderRecent(budget) {
-  var wrap = document.getElementById('recent-table-wrap');
-  if (!wrap) return;
-  var list = BudgetSync.sortExpenses(budget.e).slice(0, 5);
-  renderExpenseTable(wrap, list, 'No expenses logged in this period yet. Use the form on the right to add the first one.');
-}
-
-function renderSettings(budget) {
-  document.getElementById('set-total').value = budget.t;
-  document.getElementById('set-starting').value = budget.s;
-  var periodStart = budget.p || BudgetSync.currentBienniumStart();
-  text(document.getElementById('set-period-start'), BudgetSync.formatDate(periodStart));
-  text(document.getElementById('set-period-end'), BudgetSync.formatDate(BudgetSync.nextBienniumStart(periodStart)));
-  document.getElementById('rollup-btn').disabled = !canWrite || !(budget.e && budget.e.length);
-  document.getElementById('confirm-reset-btn').disabled = !canWrite;
-  document.getElementById('remove-btn').hidden = !canWrite;
-  document.getElementById('exp-save').disabled = !canWrite;
-  var info = BudgetSync.storageInfo(budget);
-  var storage = document.getElementById('storage-line');
-  storage.className = 'storage' + (info.full ? ' is-full' : info.warn ? ' is-warn' : '');
-  text(storage, BudgetSync.storageLineText(info));
-  var storageHelp = document.getElementById('storage-help');
-  if (storageHelp) storageHelp.hidden = !!info.google;
-  var ver = document.getElementById('app-version');
-  if (ver) text(ver, 'v' + BudgetSync.ASSET_VERSION);
-  var restoreBtn = document.getElementById('restore-cats-btn');
-  if (restoreBtn) restoreBtn.disabled = !canWrite;
-  if (info.full || info.needCard) document.getElementById('exp-save').disabled = true;
-  var urlField = document.getElementById('webhook-url');
-  if (urlField && document.activeElement !== urlField) urlField.value = budget.k || '';
-  var status = document.getElementById('webhook-status');
-  if (status) {
-    var statusParts = [];
-    if (!budget.k) statusParts.push('No webhook saved yet.');
-    else statusParts.push('Webhook saved.');
-    var statusInfo = webhookStatus || (budget.n ? { at: budget.n, ok: !!budget.o, kind: 'snapshot' } : null);
-    if (statusInfo && statusInfo.at) {
-      var when = BudgetSync.formatDateTimeChicago(statusInfo.at);
-      if (statusInfo.kind === 'email') {
-        statusParts.push(statusInfo.ok ? ('Last update sent ' + when + '.') : ('Last update try failed ' + when + '.'));
-      } else {
-        statusParts.push(statusInfo.ok ? ('Last snapshot saved ' + when + '.') : ('Last snapshot try failed ' + when + '.'));
-      }
-    }
-    if (budget.k) statusParts.push('On the last day of the month, Apps Script emails the latest snapshot. Expenses entered after the last open will not be in that email until someone opens the app. Apps Script responses cannot be read from Trello (the request is sent without CORS), so “saved” means the request left this browser without a network error.');
-    text(status, statusParts.join(' '));
-  }
-  var hookSave = document.getElementById('webhook-save');
-  var hookSend = document.getElementById('webhook-send');
-  if (hookSave) hookSave.disabled = !canWrite;
-  if (hookSend) hookSend.disabled = !canWrite || !budget.k;
-}
-
-function renderBudget(budget) {
-  currentBudget = budget;
-  renderSummary(budget);
-  renderBanners(budget);
-  renderCategories(budget);
-  renderPlan(budget);
-  renderExpenses(budget);
-  renderRecent(budget);
-  renderSettings(budget);
-  fillCategorySelect(budget, editingId && document.getElementById('exp-category').value ? packedFromForm(document.getElementById('exp-category').value) : '');
-  if (currentSection === 'reports') renderReport(budget);
-  if (!editingId) {
-    if (!document.getElementById('exp-date').value) {
-      document.getElementById('exp-date').value = BudgetSync.todayISO();
-    }
-    text(document.getElementById('exp-by'), currentMemberName);
-  }
-}
-
-var webhookStatus = null;
-
-var snapshotScheduler = BudgetSync.createSnapshotScheduler({
-  delay: 800,
-  post: function () {
-    var budget = currentBudget;
-    if (!budget || !budget.k) return;
-    var month = BudgetSync.chicagoYearMonth();
-    var payload = BudgetSync.buildMonthlyPayload(budget, month, currentMemberName, 'snapshot');
-    // Do not write pluginData after a snapshot. A save would fire t.render,
-    // which used to refresh and queue another snapshot in a tight loop.
-    BudgetSync.postWebhook(budget.k, payload).then(function () {
-      webhookStatus = { at: Date.now(), ok: true, month: month, kind: 'snapshot' };
-      if (currentBudget) renderSettings(currentBudget);
-    }).catch(function (e) {
-      webhookStatus = { at: Date.now(), ok: false, kind: 'snapshot' };
-      if (currentBudget) renderSettings(currentBudget);
-    });
-  }
-});
-
-function queueSnapshot(reason) {
-  if (!currentBudget || !currentBudget.k) return;
-  snapshotScheduler.queue(reason);
-}
-
-function showLoadedBudget(budget) {
-  currentBudget = budget;
-  showView('budget');
-  renderBudget(budget);
-  showSection(currentSection);
-  queueSnapshot('open');
-  return Promise.resolve();
-}
-
-function showAppToast(message, kind) {
-  var box = document.getElementById('app-toast');
-  if (!box) {
-    window.alert(message);
-    return;
-  }
-  box.className = 'banner ' + (kind === 'over' ? 'banner-over' : 'banner-warn');
-  box.hidden = !message;
-  text(box, message || '');
-}
-
-function maybeSeedCategories(budget) {
-  if (!budget || !canWrite) return Promise.resolve(budget);
-  var seeded = BudgetSync.ensureOfficeCategories(budget);
-  var relinked = BudgetSync.relinkExpenses(seeded.budget);
-  if (!seeded.changed && !relinked.changed) return Promise.resolve(budget);
-  return store.save(relinked.budget).then(function () {
-    return store.load();
-  }).catch(function (err) {
-    showAppToast(
-      (err && (err.cloud || err.code === 'FULL' || err.code === 'NEED_CARD')) ? BudgetSync.saveErrorMessage(err) : 'Could not save the office categories. Please try again.',
-      err && err.cloud ? 'over' : 'warn'
-    );
-    return budget;
-  });
-}
-
-function refresh() {
-  return store.load().then(function (budget) {
-    showCloudError(null);
-    currentBudget = budget;
-    if (!budget) {
-      showView('setup');
-      document.getElementById('setup-total').value = BudgetSync.DEFAULT_TOTAL;
-      return;
-    }
-    return maybeSeedCategories(budget).then(showLoadedBudget);
-  }, function (e) {
-    // Google could not be read. Never show the empty setup form here (that could
-    // start a new budget) and never fall back to writing Trello.
-    showCloudError(e || {});
-    if (!currentBudget) {
-      viewSetup.hidden = true;
-      viewBudget.hidden = true;
-    }
-  }).then(function () {
-    kickPaint();
-    hideLoader();
-  }, function (e) {
-    hideLoader();
-    throw e;
-  });
-}
-
-// Fade out the inline loading screen once the first load has rendered (or failed).
 function hideLoader() {
-  var loader = document.getElementById('app-loader');
+  var loader = $('app-loader');
   if (!loader || loader.classList.contains('is-done')) return;
   loader.classList.add('is-done');
-  setTimeout(function () {
-    if (loader.parentNode) loader.parentNode.removeChild(loader);
-    kickPaint();
-  }, 400);
+  setTimeout(function () { if (loader.parentNode) loader.parentNode.removeChild(loader); }, 400);
 }
 
-function deleteExpense(item, btn) {
-  if (!canWrite) return;
-  if (!window.confirm('Delete “' + item.desc + '”? This cannot be undone.')) return;
+/* ---------- dates ---------- */
+var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDate(ymd) {
+  var m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  return MONTHS[Number(m[2]) - 1] + ' ' + Number(m[3]) + ', ' + m[1];
+}
+function fmtStamp(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return fmtDate(iso);
+  return MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
+}
+function fmtStampTime(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return fmtDate(iso);
+  var h = d.getHours(), mi = d.getMinutes();
+  return fmtStamp(iso) + ' at ' + (h % 12 || 12) + ':' + (mi < 10 ? '0' : '') + mi + ' ' + (h < 12 ? 'AM' : 'PM');
+}
+
+/* ---------- UI helpers ---------- */
+function toast(msg) {
+  var n = $('toast');
+  text(n, msg); n.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { n.hidden = true; }, 2200);
+}
+function showBanner(msg) {
+  var b = $('banner');
+  if (!msg) { b.hidden = true; return; }
+  text(b, msg); b.hidden = false;
+}
+function svg(path) {
+  var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('width', '16'); s.setAttribute('height', '16'); s.setAttribute('viewBox', '0 0 24 24');
+  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.9');
+  s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round');
+  var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', path); s.appendChild(p);
+  return s;
+}
+function iconBtn(cls, label, path, fn) {
+  var b = el('button', 'icon-btn ' + cls);
+  b.type = 'button'; b.title = label; b.setAttribute('aria-label', label);
+  b.appendChild(svg(path));
+  b.addEventListener('click', fn);
+  return b;
+}
+var PEN = 'M4 20h4L19 9l-4-4L4 16z';
+var TRASH = 'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13';
+
+/* ---------- navigation ---------- */
+function showSection(name) {
+  closeViewer();
+  document.querySelectorAll('.nav-btn').forEach(function (b) {
+    var on = b.getAttribute('data-section') === name;
+    b.classList.toggle('is-active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('[data-section-panel]').forEach(function (s) {
+    s.hidden = s.getAttribute('data-section-panel') !== name;
+  });
+  if (name === 'settings') renderSettings();
+  if (name === 'announcements') renderAnnouncements();
+}
+document.querySelectorAll('.nav-btn').forEach(function (b) {
+  b.addEventListener('click', function () { showSection(b.getAttribute('data-section')); });
+});
+
+/* ---------- in-app document viewer ---------- */
+function fillViewerSign(d) {
+  var slot = $('viewer-sign');
+  if (!slot) return;
+  slot.textContent = '';
+  if (!d || !d.sign) return;
+  if (!me) {
+    slot.appendChild(el('span', 'need', 'Cannot tell who you are in Trello, so signing is off.'));
+    return;
+  }
+  var mine = Docs.findSig(state.records, d.id, me.id, d.version);
+  if (mine) {
+    slot.appendChild(el('span', 'signed-note', '✓ You signed on ' + fmtStampTime(mine.at)));
+    return;
+  }
+  slot.appendChild(el('span', 'need', 'Signature needed'));
+  var sb = el('button', 'ghost sign-btn', 'Sign');
+  sb.type = 'button';
+  sb.addEventListener('click', function () { openSign(d.id); });
+  slot.appendChild(sb);
+}
+
+function openViewer(d) {
+  if (!d) return;
+  var preview = Docs.previewUrl(d.url);
+  if (!preview) {
+    window.open(d.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  viewId = d.id;
+  text($('viewer-title'), d.title);
+  $('viewer-frame').title = d.title;
+  $('viewer-frame').src = preview;
+  var ext = $('viewer-external');
+  ext.href = d.url;
+  fillViewerSign(d);
+  $('doc-viewer').hidden = false;
+  $('main').classList.add('is-viewing');
+  if (typeof t.sizeTo === 'function') { try { t.sizeTo('#app'); } catch (e) {} }
+}
+
+function closeViewer() {
+  if (!viewId && $('doc-viewer') && $('doc-viewer').hidden) return;
+  viewId = null;
+  var frame = $('viewer-frame');
+  if (frame) frame.src = 'about:blank';
+  if ($('doc-viewer')) $('doc-viewer').hidden = true;
+  if ($('main')) $('main').classList.remove('is-viewing');
+}
+
+$('viewer-back').addEventListener('click', function () { closeViewer(); });
+
+/* ---------- list ---------- */
+function renderChips() {
+  var wrap = $('chips');
+  wrap.textContent = '';
+  [''].concat(Docs.CATEGORIES).forEach(function (c) {
+    var b = el('button', 'chip' + (catFilter === c ? ' is-active' : ''), c || 'All');
+    b.type = 'button';
+    b.addEventListener('click', function () { catFilter = c; renderChips(); renderList(); });
+    wrap.appendChild(b);
+  });
+}
+
+function sigLine(s, showTyped) {
+  var who = s.memberName || s.typed;
+  var line = who + ', ' + fmtStampTime(s.at);
+  if (showTyped && s.typed && s.typed.toLowerCase() !== (s.memberName || '').toLowerCase()) line += ' (typed: ' + s.typed + ')';
+  return line;
+}
+
+function adminPanel(d) {
+  var current = Docs.sigsOf(state.records, d.id, d.version);
+  var all = Docs.sigsOf(state.records, d.id);
+  var det = el('details', 'sigs');
+  var sum = el('summary', null, 'Signatures: ' + current.length + ' signed on version ' + d.version);
+  sum.appendChild(el('span', 'admin-tag', 'only you can see this'));
+  det.appendChild(sum);
+
+  det.appendChild(el('h3', null, 'Signed by'));
+  if (!current.length) det.appendChild(el('div', 'none', 'No one has signed this version yet.'));
+  else {
+    var ul = el('ul');
+    current.forEach(function (s) { ul.appendChild(el('li', null, sigLine(s, true))); });
+    det.appendChild(ul);
+  }
+  if (members.length) {
+    var signedIds = {};
+    current.forEach(function (s) { signedIds[s.memberId] = true; });
+    var pending = members.filter(function (m) { return !signedIds[m.id] && !(me && m.id === me.id); }).map(function (m) { return m.name; });
+    det.appendChild(el('h3', null, 'Not yet signed'));
+    det.appendChild(el('div', pending.length ? 'none' : null, pending.length ? pending.join(', ') : 'Everyone on the board has signed.'));
+  }
+  var past = all.filter(function (s) { return s.version !== d.version; });
+  if (past.length) {
+    det.appendChild(el('h3', null, 'History (earlier versions)'));
+    var versions = {};
+    past.forEach(function (s) { (versions[s.version] = versions[s.version] || []).push(s); });
+    Object.keys(versions).sort(function (a, b) { return Number(b) - Number(a); }).forEach(function (v) {
+      var u = el('ul');
+      versions[v].forEach(function (s) { u.appendChild(el('li', null, 'Version ' + v + ': ' + sigLine(s, true))); });
+      det.appendChild(u);
+    });
+  }
+  return det;
+}
+
+function entry(d) {
+  var box = el('div', 'entry');
+  var top = el('div', 'entry-top');
+  var main = el('div', 'e-main');
+  var tr = el('div', 'e-titlerow');
+  tr.appendChild(el('span', 'e-title', d.title));
+  if (d.cat) tr.appendChild(el('span', 'badge', d.cat));
+  if (d.sign && d.version > 1) tr.appendChild(el('span', 'badge ver', 'Version ' + d.version));
+  main.appendChild(tr);
+  if (d.desc) main.appendChild(el('div', 'e-desc', d.desc));
+  var meta = 'Added ' + fmtDate(d.date);
+  if (d.updated) meta += ' · Updated ' + fmtDate(d.updated);
+  main.appendChild(el('div', 'e-meta', meta));
+  top.appendChild(main);
+
+  var side = el('div', 'e-side');
+  var btns = el('div', 'e-btns');
+  if (d.sign) {
+    var mine = me ? Docs.findSig(state.records, d.id, me.id, d.version) : null;
+    if (!me) {
+      btns.appendChild(el('span', 'need', 'Cannot tell who you are in Trello, so signing is off.'));
+    } else if (!mine) {
+      btns.appendChild(el('span', 'need', 'Signature needed'));
+      var sb = el('button', 'ghost big sign-btn', 'Sign');
+      sb.type = 'button';
+      sb.addEventListener('click', function () { openSign(d.id); });
+      btns.appendChild(sb);
+    }
+  }
+  var open = el('a', 'primary big', 'Open');
+  open.href = d.url; open.target = '_blank'; open.rel = 'noopener noreferrer';
+  open.addEventListener('click', function (e) {
+    if (Docs.previewUrl(d.url)) { e.preventDefault(); openViewer(d); }
+  });
+  btns.appendChild(open);
+  side.appendChild(btns);
+  if (d.sign && me) {
+    var mine2 = Docs.findSig(state.records, d.id, me.id, d.version);
+    if (mine2) side.appendChild(el('div', 'signed-note', '✓ You signed on ' + fmtStampTime(mine2.at)));
+  }
+  var icons = el('div', 'icon-row');
+  icons.appendChild(iconBtn('', 'Edit', PEN, function () { openForm(d.id); }));
+  icons.appendChild(iconBtn('del', 'Delete', TRASH, function () { askDelete(d.id); }));
+  side.appendChild(icons);
+  top.appendChild(side);
+  box.appendChild(top);
+  if (d.sign && isAdmin()) box.appendChild(adminPanel(d));
+  return box;
+}
+
+function renderList() {
+  var list = $('list');
+  list.textContent = '';
+  var docs = Docs.docsOf(state.records);
+  text($('side-count'), docs.length + (docs.length === 1 ? ' document' : ' documents'));
+  var q = query.trim().toLowerCase();
+  var shown = docs.filter(function (d) {
+    if (catFilter && d.cat !== catFilter) return false;
+    if (!q) return true;
+    return (d.title + ' ' + d.desc + ' ' + d.cat).toLowerCase().indexOf(q) >= 0;
+  });
+  if (!shown.length) {
+    var e = el('div', 'empty');
+    e.appendChild(el('strong', null, docs.length ? 'No matching documents' : 'No documents yet'));
+    e.appendChild(document.createTextNode(docs.length ? 'Try a different search.' : 'Click “+ Add document” to add the first one.'));
+    list.appendChild(e);
+  } else {
+    shown.forEach(function (d) { list.appendChild(entry(d)); });
+  }
+  renderBanners();
+  renderBulletins();
+}
+
+function renderBanners() {
+  var cap = Docs.capacity(state);
+  var ban = $('banner');
+  if (state.cloudError) {
+    showBanner('Office Hub could not move to Google storage yet, so it is still using Trello and works as before. ' + Docs.saveErrorMessage(state.cloudError));
+    if (ban) ban.className = 'banner is-full';
+  } else if (state.missing > 0) showBanner(Docs.missingMessage());
+  else if (cap.full) showBanner(Docs.needCardMessage(cap.nextTitle));
+  else if (cap.warn && cap.google) showBanner('Google storage is ' + cap.percent + '% full. Room for about ' + cap.roomFor + ' more items.');
+  else if (cap.warn) showBanner('Storage is ' + cap.percent + '% full. Soon you will need to add a card named “' + cap.nextTitle + '” to an open list (never archived).');
+  else showBanner('');
+}
+
+/* ---------- settings ---------- */
+function renderSettings() {
+  var cap = Docs.capacity(state);
+  var google = !!(state && state.google);
+  var fill = $('meter-fill');
+  fill.style.width = Math.max(2, cap.percent) + '%';
+  fill.classList.toggle('is-warn', cap.warn || cap.full);
+  text($('meter-text'), Docs.storageLineText(cap));
+  text($('meter-room'), 'Room for about ' + cap.roomFor + ' more documents, signatures, or announcements.');
+  if ($('meter-cards')) {
+    $('meter-cards').hidden = google;
+    if (!google) {
+      text($('meter-cards'), state.cardIds.length
+        ? 'Storage cards found: ' + state.cardNames.join('; ')
+        : 'No storage cards yet. They are only needed when this board-level space fills up. Then add a card named “' + cap.nextTitle + '”.');
+    }
+  }
+  if ($('storage-card-note')) $('storage-card-note').hidden = google;
+  text($('ver'), Docs.ASSET_VERSION);
+  if ($('cloud-status')) {
+    text($('cloud-status'), google
+      ? 'Documents, signatures, and announcements are stored in Google.'
+      : 'Data is still on Trello. If you have already opened Office Budget on this computer, Office Hub will pick up the script link and move by itself. Otherwise paste the same Apps Script link (the Webhook URL from Office Budget’s Settings) and click Save link.');
+  }
+  if ($('cloud-form')) $('cloud-form').hidden = google || !canWrite;
+  if ($('about-text')) {
+    text($('about-text'), google
+      ? 'Documents live on Google Drive. Titles, links, signatures, and announcements are stored in Google, in the Office Budget Email script, and only people with access to this board can open them. Staff see only their own signature and acknowledgements. That is hidden from view, not encrypted.'
+      : 'Documents live on Google Drive. This app only keeps the titles, links, signatures, and announcements, and stores them on this Trello board. Staff see only their own signature and acknowledgements. That is hidden from view, not encrypted: someone technical with board access could read the raw Trello data.');
+  }
+
+  var actions = $('admin-actions');
+  actions.textContent = '';
+  var stored = state.admin;
+  var adminNow = isAdmin();
+  var msg;
+  if (adminNow) msg = 'You are the document admin. Only you can see who has signed, mark a document as updated, and delete a document that has signatures.';
+  else if (stored) msg = 'The document admin is ' + (stored[1] || 'set') + '. You can see and sign documents, but only the admin sees who has signed.';
+  else msg = 'No document admin is set yet. The admin is the person who sees who has signed. Calvin should set this first.';
+  if (stored && adminNow && stored[0] !== (me && me.id)) msg += ' (Admin on file: ' + (stored[1] || 'someone else') + '.)';
+  text($('admin-text'), msg);
+
+  function adminBtn(label, cls, pair, doneMsg) {
+    var b = el('button', cls, label);
+    b.type = 'button';
+    b.addEventListener('click', function () {
+      if (isBusy(b)) return;
+      withDots(b, Docs.mutate(t, function (recs) { return recs; }, function () { return pair; }).then(function (s) {
+        state = s; renderAll(); renderSettings(); toast(doneMsg);
+      })).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
+    });
+    actions.appendChild(b);
+  }
+  if (me && !stored) adminBtn('Make me the document admin', 'primary', [me.id, me.name], 'You are now the admin');
+  else if (me && Docs.nameMatchesAdmin(me) && (!stored || stored[0] !== me.id)) adminBtn('Take over as admin', 'primary', [me.id, me.name], 'You are now the admin');
+  else if (me && stored && stored[0] === me.id) adminBtn('Step down as admin', 'ghost', null, 'Admin cleared');
+}
+
+/* ---------- storage plumbing ---------- */
+function guardWrite() {
+  if (!canWrite) { toast('You do not have permission to change this board.'); return false; }
+  return true;
+}
+function refresh(s) {
+  state = s;
+  renderAll();
+  if (viewId) {
+    var d = null;
+    Docs.docsOf(state.records).forEach(function (x) { if (x.id === viewId) d = x; });
+    if (d) fillViewerSign(d);
+    else closeViewer();
+  }
+}
+function renderAll() { renderList(); renderAnnouncements(); }
+
+/* ---------- add / edit ---------- */
+function openForm(id) {
+  editId = id || null;
+  var d = null;
+  if (id) {
+    Docs.docsOf(state.records).forEach(function (x) { if (x.id === id) d = x; });
+    if (!d) return;
+  }
+  text($('form-title'), d ? 'Edit document' : 'Add document');
+  $('f-title').value = d ? d.title : '';
+  $('f-url').value = d ? d.url : '';
+  $('f-desc').value = d ? d.desc : '';
+  $('f-cat').value = d ? d.cat : '';
+  $('f-sign').checked = d ? d.sign : false;
+  var locked = !!(d && Docs.hasSigs(state.records, d.id) && !isAdmin());
+  $('f-sign').disabled = locked;
+  $('f-sign-note').hidden = !locked;
+  $('f-bump').checked = false;
+  $('f-bump-wrap').hidden = !(d && d.sign && isAdmin());
+  text($('form-error'), '');
+  $('form-overlay').hidden = false;
+  $('f-title').focus();
+}
+function closeForm() { $('form-overlay').hidden = true; editId = null; }
+
+(function buildCats() {
+  var sel = $('f-cat');
+  var none = el('option', null, 'None'); none.value = '';
+  sel.appendChild(none);
+  Docs.CATEGORIES.forEach(function (c) { var o = el('option', null, c); o.value = c; sel.appendChild(o); });
+})();
+
+$('btn-add').addEventListener('click', function () { if (guardWrite()) openForm(null); });
+$('f-cancel').addEventListener('click', closeForm);
+
+$('doc-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var btn = submitBtn(e);
   if (isBusy(btn)) return;
-  withDots(btn, store.load().then(function (budget) {
-    if (!budget) return;
-    return store.save(BudgetSync.deleteExpense(budget, item.id)).then(function () {
-      if (editingId === item.id) resetExpenseForm();
-      return refresh().then(function () {
-        queueSnapshot('expense');
-      });
-    });
-  }).catch(function (e) {
-    window.alert(errText(e, 'Could not delete that expense. Please try again.'));
-  }));
-}
-
-document.getElementById('setup-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('setup-error');
-  BudgetSync.showError(err, '');
-  var total = BudgetSync.parseMoney(document.getElementById('setup-total').value);
-  var startingRaw = document.getElementById('setup-starting').value;
-  var starting = startingRaw.trim() === '' ? 0 : BudgetSync.parseMoney(startingRaw);
-  if (!isFinite(total) || total < 0) {
-    BudgetSync.showError(err, 'Enter a biennium budget of zero or more.');
-    return;
-  }
-  if (!isFinite(starting) || starting < 0) {
-    BudgetSync.showError(err, 'Enter an already-spent amount of zero or more.');
-    return;
-  }
-  if (isBusy(submitBtn(event))) return;
-  withDots(submitBtn(event), store.save(BudgetSync.emptyBudget(total, starting)).then(refresh).catch(function (e) {
-    BudgetSync.showError(err, errText(e, 'Could not save the budget. Please try again.'));
-  }));
-});
-
-document.getElementById('expense-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('exp-error');
-  BudgetSync.showError(err, '');
-  var date = (document.getElementById('exp-date').value || '').trim();
-  var desc = (document.getElementById('exp-desc').value || '').trim();
-  var amount = BudgetSync.parseMoney(document.getElementById('exp-amount').value);
-  var catPacked = packedFromForm(document.getElementById('exp-category').value);
-  if (!date) return BudgetSync.showError(err, 'Please pick a date.');
-  if (!desc) return BudgetSync.showError(err, 'Please enter a short description.');
-  if (catPacked === '') return BudgetSync.showError(err, 'Please choose a category.');
-  if (!isFinite(amount) || amount <= 0) return BudgetSync.showError(err, 'Enter an amount greater than zero.');
-
-  if (isBusy(submitBtn(event))) return;
-  withDots(submitBtn(event), store.load().then(function (budget) {
-    if (!budget) throw new Error('NO_BUDGET');
-    var expense = {
-      id: editingId || BudgetSync.newId(),
-      date: date,
-      desc: desc,
-      catPacked: catPacked,
-      amount: amount,
-      by: editingId ? (originalBy || currentMemberName) : currentMemberName
-    };
-    return store.save(BudgetSync.upsertExpense(budget, expense));
-  }).then(function () {
-    resetExpenseForm();
-    return refresh().then(function () {
-      queueSnapshot('expense');
-    });
-  }).catch(function (e) {
-    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD' || (e.message && String(e.message).indexOf('4096') !== -1))) {
-      BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
-      return;
-    }
-    BudgetSync.showError(err, errText(e, 'Could not save this expense. Please try again.'));
-  }));
-});
-
-document.getElementById('exp-cancel').addEventListener('click', resetExpenseForm);
-
-document.getElementById('exp-delete').addEventListener('click', function () {
-  if (!editingId || !currentBudget) return;
-  var item = BudgetSync.findExpense(currentBudget, editingId);
-  if (item) deleteExpense(item, document.getElementById('exp-delete'));
-});
-
-document.getElementById('settings-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('set-error');
-  BudgetSync.showError(err, '');
-  var total = BudgetSync.parseMoney(document.getElementById('set-total').value);
-  var starting = BudgetSync.parseMoney(document.getElementById('set-starting').value);
-  if (!isFinite(total) || total < 0) return BudgetSync.showError(err, 'Enter a biennium budget of zero or more.');
-  if (!isFinite(starting) || starting < 0) return BudgetSync.showError(err, 'Enter an already-spent amount of zero or more.');
-  if (isBusy(submitBtn(event))) return;
-  withDots(submitBtn(event), store.load().then(function (budget) {
-    if (!budget) throw new Error('NO_BUDGET');
-    return store.save(BudgetSync.withMeta(budget, { t: total, s: starting }));
-  }).then(refresh).catch(function (e) {
-    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
-    BudgetSync.showError(err, errText(e, 'Could not save settings. Please try again.'));
-  }));
-});
-
-document.getElementById('rollup-btn').addEventListener('click', function () {
-  if (!currentBudget || !currentBudget.e.length) return;
-  var logged = BudgetSync.loggedSpentOf(currentBudget);
-  var nextSpent = BudgetSync.spentOf(currentBudget);
-  var ok = window.confirm(
-    'Add the ' + currentBudget.e.length + ' logged expense' + (currentBudget.e.length === 1 ? '' : 's') +
-    ' (' + BudgetSync.formatMoney(logged) + ') into Already spent, and clear the expense list? ' +
-    'Spent will stay ' + BudgetSync.formatMoney(nextSpent) + '. This cannot be undone.'
-  );
-  if (!ok) return;
-  if (isBusy(document.getElementById('rollup-btn'))) return;
-  withDots(document.getElementById('rollup-btn'), store.save(BudgetSync.rollUp(currentBudget)).then(function () {
-    resetExpenseForm();
-    return refresh();
-  }).catch(function (e) {
-    window.alert(errText(e, 'Could not roll up expenses. Please try again.'));
-  }));
-});
-
-function renderReport(budget) {
-  var reportEl = document.getElementById('report');
-  reportEl.textContent = '';
-  if (!budget) {
-    reportEl.appendChild(el('p', { className: 'empty', text: 'No budget is set up on this board yet.' }));
-    return;
-  }
-  var spent = BudgetSync.spentOf(budget);
-  var left = BudgetSync.leftOf(budget);
-  var starting = BudgetSync.startingSpentOf(budget);
-  var logged = BudgetSync.loggedSpentOf(budget);
-  var pct = BudgetSync.percentRemaining(budget);
-  var generated = generatedStamp();
-  var today = BudgetSync.todayISO();
-  var periodStart = budget.p || BudgetSync.currentBienniumStart();
-  var expenses = BudgetSync.sortExpenses(budget.e).slice().reverse();
-  var cats = BudgetSync.categoryTotals(budget);
-  document.title = 'AD35 Office Budget Report — ' + longDate(today);
-
-  reportEl.appendChild(el('header', { className: 'letterhead' }, [
-    el('p', { className: 'district', text: 'Assembly District 35' }),
-    el('p', { className: 'name', text: 'Calvin Callahan' }),
-    el('p', { className: 'title', text: 'Office Budget' })
-  ]));
-  reportEl.appendChild(el('dl', { className: 'meta' }, [
-    el('dt', { text: 'Session period' }),
-    el('dd', { text: longDate(periodStart) + ' – ' + longDate(today) }),
-    el('dt', { text: 'Generated' }),
-    el('dd', { text: generated })
-  ]));
-  reportEl.appendChild(el('h2', { text: 'Budget summary' }));
-  reportEl.appendChild(el('table', { className: 'totals' }, [el('tbody', null, [
-    el('tr', null, [el('th', { text: 'Biennium budget' }), el('td', { className: 'num', text: moneyReport(budget.t) })]),
-    el('tr', null, [el('th', { text: 'Already spent' }), el('td', { className: 'num', text: moneyReport(BudgetSync.effectiveStartingOf(budget)) })]),
-    el('tr', null, [el('th', { text: 'Expenses logged this period' }), el('td', { className: 'num', text: moneyReport(logged) })]),
-    el('tr', { className: 'grand' }, [el('th', { text: 'Total spent' }), el('td', { className: 'num', text: moneyReport(spent) })]),
-    el('tr', { className: 'grand' }, [el('th', { text: 'Total remaining' }), el('td', { className: 'num', text: moneyReport(left) })]),
-    el('tr', null, [el('th', { text: 'Percent remaining' }), el('td', { className: 'num', text: pct + '%' })])
-  ])]));
-
-  var track = BudgetSync.plannedTracking(budget);
-  if (track.categories.length) {
-    reportEl.appendChild(el('h2', { text: 'Planned vs spent' }));
-    var planBody = el('tbody');
-    track.categories.forEach(function (row) {
-      planBody.appendChild(el('tr', null, [
-        el('td', { text: row.groupName ? (row.groupName + ' — ' + row.name) : row.name }),
-        el('td', { className: 'num', text: moneyReport(row.planned) }),
-        el('td', { className: 'num', text: moneyReport(row.spent) }),
-        el('td', { className: 'num' + (row.status !== 'none' && row.left < 0 ? ' is-over' : ''), text: row.status === 'none' ? '—' : moneyReport(row.left) })
-      ]));
-    });
-    if (track.unplannedSpent) {
-      planBody.appendChild(el('tr', null, [
-        el('td', { text: 'Unplanned / unitemized' }),
-        el('td', { className: 'num', text: moneyReport(0) }),
-        el('td', { className: 'num', text: moneyReport(track.unplannedSpent) }),
-        el('td', { className: 'num', text: '—' })
-      ]));
-    }
-    reportEl.appendChild(el('table', { className: 'plan-table' }, [
-      el('thead', null, [el('tr', null, [el('th', { text: 'Category' }), el('th', { className: 'num', text: 'Planned' }), el('th', { className: 'num', text: 'Spent' }), el('th', { className: 'num', text: 'Left' })])]),
-      planBody,
-      el('tfoot', null, [el('tr', null, [
-        el('td', { text: 'Total' }),
-        el('td', { className: 'num', text: moneyReport(track.totalPlanned) }),
-        el('td', { className: 'num', text: moneyReport(spent) }),
-        el('td', { className: 'num', text: '' })
-      ])])
-    ]));
-    var planNote = 'Spent amounts include any amounts carried in for a category plus expenses logged this period. The already-spent total from the state report (' + moneyReport(starting) + ') is not added a second time.';
-    if (track.unitemized) planNote += ' The ' + moneyReport(track.unitemized) + ' gap between that already-spent total and the amounts carried in by category is listed as Other / unitemized.';
-    if (track.overPlanned) planNote += ' Planned categories exceed the biennium budget by ' + moneyReport(Math.abs(track.unallocated)) + '.';
-    reportEl.appendChild(el('p', { className: 'note', text: planNote }));
-  } else {
-    reportEl.appendChild(el('h2', { text: 'Totals by category' }));
-    if (!cats.length) {
-      reportEl.appendChild(el('p', { className: 'empty', text: 'No categorized expenses were logged this period. The already-spent amount from the state report is a total only and is not broken down by category.' }));
+  if (!guardWrite()) return;
+  var title = $('f-title').value.trim();
+  if (!title) { text($('form-error'), 'Please enter a title.'); return; }
+  var u = Docs.normalizeUrl($('f-url').value);
+  if (u.error) { text($('form-error'), u.error); return; }
+  var desc = $('f-desc').value.trim();
+  var cat = $('f-cat').value;
+  var sign = $('f-sign').checked;
+  var bump = !$('f-bump-wrap').hidden && $('f-bump').checked && isAdmin();
+  var id = editId;
+  var admin = isAdmin();
+  withDots(btn, Docs.mutate(t, function (recs) {
+    if (id) {
+      var at = -1;
+      recs.forEach(function (r, k) { if (r[0] === 'd' && r[1] === id) at = k; });
+      if (at < 0) return null;
+      var old = recs[at];
+      var keepSign = (!admin && Docs.hasSigs(recs, id)) ? true : sign;
+      var version = Number(old[8]) || 1, updated = old[9] || '';
+      if (bump) { version += 1; updated = Docs.today(); }
+      recs[at] = Docs.docRecord({ id: id, title: title, url: u.url, desc: desc, date: old[5], sign: keepSign, cat: cat, version: version, updated: updated });
     } else {
-      var catBody = el('tbody');
-      cats.forEach(function (row) {
-        catBody.appendChild(el('tr', null, [el('td', { text: row.label }), el('td', { className: 'num', text: moneyReport(row.amount) })]));
-      });
-      reportEl.appendChild(el('table', null, [
-        el('thead', null, [el('tr', null, [el('th', { text: 'Category' }), el('th', { className: 'num', text: 'Amount' })])]),
-        catBody,
-        el('tfoot', null, [el('tr', null, [el('td', { text: 'Logged expenses total' }), el('td', { className: 'num', text: moneyReport(logged) })])])
-      ]));
-      reportEl.appendChild(el('p', { className: 'note', text: 'Category totals are for expenses logged in Budget Sync this period. They do not include the already-spent amount carried in from the state report (' + moneyReport(starting) + ').' }));
+      recs.push(Docs.docRecord({ title: title, url: u.url, desc: desc, sign: sign, cat: cat }));
     }
-  }
+    return recs;
+  }).then(function (s) {
+    closeForm(); refresh(s);
+    toast(bump ? 'Saved. Everyone must sign again.' : 'Saved');
+  })).catch(function (err) { text($('form-error'), Docs.saveErrorMessage(err)); });
+});
 
-  reportEl.appendChild(el('h2', { text: 'Expense list' }));
-  if (!expenses.length) {
-    reportEl.appendChild(el('p', { className: 'empty', text: 'No expenses were logged this period.' }));
-  } else {
-    var expBody = el('tbody');
-    expenses.forEach(function (item) {
-      expBody.appendChild(el('tr', null, [
-        el('td', { text: BudgetSync.formatDate(item.date) }),
-        el('td', { text: item.desc || '' }),
-        el('td', { text: item.cat || '' }),
-        el('td', { className: 'num', text: moneyReport(item.amount) }),
-        el('td', { text: item.by || '' })
-      ]));
-    });
-    reportEl.appendChild(el('table', null, [
-      el('thead', null, [el('tr', null, [el('th', { text: 'Date' }), el('th', { text: 'Description' }), el('th', { text: 'Category' }), el('th', { className: 'num', text: 'Amount' }), el('th', { text: 'Entered by' })])]),
-      expBody,
-      el('tfoot', null, [el('tr', null, [el('td', { text: 'Total' }), el('td', { text: '' }), el('td', { text: '' }), el('td', { className: 'num', text: moneyReport(logged) }), el('td', { text: '' })])])
-    ]));
+/* ---------- sign ---------- */
+function openSign(id) {
+  var d = null;
+  Docs.docsOf(state.records).forEach(function (x) { if (x.id === id) d = x; });
+  if (!d || !me) return;
+  signId = id;
+  text($('sign-title'), 'Sign: ' + d.title);
+  $('s-name').value = '';
+  text($('sign-error'), '');
+  $('sign-overlay').hidden = false;
+  $('s-name').focus();
+}
+function closeSign() { $('sign-overlay').hidden = true; signId = null; }
+$('s-cancel').addEventListener('click', closeSign);
+
+$('sign-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  if (!guardWrite() || !me) return;
+  var typed = $('s-name').value.trim().replace(/\s+/g, ' ');
+  if (typed.length < 3) { text($('sign-error'), 'Please type your full name.'); return; }
+  var id = signId;
+  var seenVersion = null;
+  Docs.docsOf(state.records).forEach(function (x) { if (x.id === id) seenVersion = x.version; });
+  var problem = '';
+  withDots(btn, Docs.mutate(t, function (recs) {
+    var cur = null;
+    Docs.docsOf(recs).forEach(function (x) { if (x.id === id) cur = x; });
+    if (!cur) { problem = 'This document was removed.'; return null; }
+    if (cur.version !== seenVersion) { problem = 'This document was just updated. Close this window, reopen it, and read the new version first.'; return null; }
+    if (Docs.findSig(recs, id, me.id, cur.version)) { problem = 'You have already signed this document.'; return null; }
+    recs.push(Docs.sigRecord(id, me, typed, cur.version));
+    return recs;
+  }).then(function (s) {
+    closeSign(); refresh(s);
+    toast(problem || 'Signed. Thank you.');
+  })).catch(function (err) { text($('sign-error'), Docs.saveErrorMessage(err)); });
+});
+
+/* ---------- delete ---------- */
+function askDelete(id) {
+  if (!guardWrite()) return;
+  var d = null;
+  Docs.docsOf(state.records).forEach(function (x) { if (x.id === id) d = x; });
+  if (!d) return;
+  if (Docs.hasSigs(state.records, id) && !isAdmin()) {
+    toast('Only the document admin can delete a document that has signatures.');
+    return;
   }
-  reportEl.appendChild(el('p', { className: 'note', text: 'Generated from Budget Sync on the Callahan Office board. This is an office record of the biennium budget and expenses logged in Trello as of ' + generated + '.' }));
+  confirmKind = 'doc';
+  deleteId = id;
+  text($('confirm-title'), 'Delete this document?');
+  text($('confirm-text'), '“' + d.title + '” will be removed for everyone on this board' + (Docs.hasSigs(state.records, id) ? ', along with all of its signatures and signature history' : '') + '. The file in Google Drive is not touched. This cannot be undone.');
+  $('confirm-overlay').hidden = false;
 }
 
-document.getElementById('back-btn').addEventListener('click', function () {
-  document.title = 'Office Budget';
-  showSection('overview');
+function askDeleteAnnouncement(id) {
+  if (!isAdmin() || !guardWrite()) return;
+  var b = null;
+  Docs.bulletinsOf(state.records, false).forEach(function (x) { if (x.id === id) b = x; });
+  if (!b) return;
+  confirmKind = 'ann';
+  deleteId = id;
+  text($('confirm-title'), 'Delete this announcement?');
+  text($('confirm-text'), '“' + b.title + '” will be removed for everyone on this board, along with who has acknowledged it' + (b.active ? '. It will also stop popping up' : '') + '. This cannot be undone.');
+  $('confirm-overlay').hidden = false;
+}
+$('c-cancel').addEventListener('click', function () { $('confirm-overlay').hidden = true; deleteId = null; });
+$('c-ok').addEventListener('click', function () {
+  var btn = $('c-ok');
+  if (isBusy(btn)) return;
+  var id = deleteId;
+  var kind = confirmKind;
+  var admin = isAdmin();
+  var problem = '';
+  withDots(btn, Docs.mutate(t, function (recs) {
+    if (kind === 'ann') {
+      if (!admin) { problem = 'Only the admin can delete an announcement.'; return null; }
+      return Docs.removeAnnouncement(recs, id);
+    }
+    if (!admin && Docs.hasSigs(recs, id)) { problem = 'Only the document admin can delete a document that has signatures.'; return null; }
+    return recs.filter(function (r) { return !((r[0] === 'd' && r[1] === id) || (r[0] === 's' && r[1] === id)); });
+  }).then(function (s) {
+    $('confirm-overlay').hidden = true; deleteId = null; refresh(s); toast(problem || 'Deleted');
+  })).catch(function (err) { $('confirm-overlay').hidden = true; toast(Docs.saveErrorMessage(err)); });
 });
 
-document.getElementById('print-btn').addEventListener('click', function () {
-  window.print();
-});
-
-document.getElementById('confirm-reset-btn').addEventListener('click', function () {
-  if (!currentBudget) return;
-  var start = BudgetSync.periodStartForReset(currentBudget);
-  var ok = window.confirm(
-    'I\'ve saved the report, reset for next session?\n\nThis will clear all expenses, per-category spent and carried-in amounts, the already-spent total, and unitemized amounts. The biennium budget goes back to $25,000, and the next period starts on ' +
-    BudgetSync.formatDate(start) + '. Every category the office has made is kept — names, groups, and planned amounts. A reset never deletes categories. This cannot be undone.'
-  );
-  if (!ok) return;
-  if (isBusy(document.getElementById('confirm-reset-btn'))) return;
-  withDots(document.getElementById('confirm-reset-btn'), store.save(BudgetSync.startNewPeriod(currentBudget)).then(function () {
-    resetExpenseForm();
-    resetPlanForm();
-    document.title = 'Office Budget';
-    showSection('overview');
-    return refresh();
-  }).catch(function (e) {
-    BudgetSync.showError(document.getElementById('report-error'), errText(e, 'Could not reset the budget. Please try again.'));
-  }));
-});
-
-document.getElementById('remove-btn').addEventListener('click', function () {
-  if (!window.confirm('Remove the budget from this board? Expense history will be deleted.')) return;
-  if (isBusy(document.getElementById('remove-btn'))) return;
-  withDots(document.getElementById('remove-btn'), store.remove().then(function () {
-    resetExpenseForm();
-    return refresh();
-  }).catch(function (e) {
-    window.alert(errText(e, 'Could not remove the budget. Please try again.'));
-  }));
+/* ---------- search / keys ---------- */
+$('search').addEventListener('input', function () { query = $('search').value; renderList(); });
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  if (!$('confirm-overlay').hidden) $('confirm-overlay').hidden = true;
+  else if (!$('bull-form-overlay').hidden) closeBullForm();
+  else if (!$('bulletin-overlay').hidden) $('bp-later').click();
+  else if (!$('sign-overlay').hidden) closeSign();
+  else if (!$('form-overlay').hidden) closeForm();
+  else if (viewId) closeViewer();
 });
 
 
-document.querySelectorAll('.nav-btn[data-section]').forEach(function (btn) {
-  btn.addEventListener('click', function () {
-    showSection(btn.getAttribute('data-section'));
-  });
+
+/* ---------- bulletins ---------- */
+var bulletinEditId = null;
+var popQueue = [];
+var popIndex = 0;
+var skipPop = false;
+var popShown = false;
+
+function renderBulletins() {
+  var wrap = $('bulletin-banners');
+  if (!wrap) return;
+  wrap.textContent = '';
+  $('btn-bulletin').hidden = !isAdmin();
+  var list = me ? Docs.unackedBulletins(state.records, me.id) : [];
+  list.forEach(function (b) { wrap.appendChild(bannerEl(b)); });
+  if (!skipPop && !popShown && list.length) { popShown = true; openBulletinPop(list); }
+}
+
+function bannerEl(b) {
+  var box = el('div', 'bulletin-banner');
+  box.appendChild(el('p', 'bb-kicker', 'Office Bulletin'));
+  box.appendChild(el('h3', null, b.title));
+  if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
+  var acts = el('div', 'bb-actions');
+  if (b.url) {
+    var a = el('a', 'primary', 'Click here');
+    a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    acts.appendChild(a);
+  }
+  var ack = el('button', 'ghost', 'Acknowledge');
+  ack.type = 'button';
+  ack.addEventListener('click', function () { acknowledge(b.id, null, ack); });
+  acts.appendChild(ack);
+  box.appendChild(acts);
+  return box;
+}
+
+function openBulletinPop(list) {
+  popQueue = list; popIndex = 0;
+  showPop();
+}
+function showPop() {
+  var b = popQueue[popIndex];
+  if (!b) { $('bulletin-overlay').hidden = true; return; }
+  text($('bp-title'), b.title);
+  text($('bp-msg'), b.message || '');
+  var link = $('bp-link');
+  if (b.url) { link.href = b.url; link.hidden = false; }
+  else { link.hidden = true; }
+  $('bulletin-overlay').hidden = false;
+}
+function closePop() { $('bulletin-overlay').hidden = true; }
+$('bp-later').addEventListener('click', function () {
+  popIndex += 1;
+  if (popIndex < popQueue.length) showPop();
+  else { skipPop = true; closePop(); }
+});
+$('bp-ack').addEventListener('click', function () {
+  var b = popQueue[popIndex];
+  if (!b) { closePop(); return; }
+  acknowledge(b.id, function () {
+    popIndex += 1;
+    if (popIndex < popQueue.length) showPop();
+    else closePop();
+  }, $('bp-ack'));
 });
 
-var viewAll = document.getElementById('view-all-expenses');
-if (viewAll) {
-  viewAll.addEventListener('click', function () {
-    showSection('expenses');
-  });
+function acknowledge(id, then, btn) {
+  if (!guardWrite() || !me) return;
+  if (isBusy(btn)) return;
+  var problem = '';
+  withDots(btn, Docs.mutate(t, function (recs) {
+    if (Docs.findAck(recs, id, me.id)) return recs;
+    recs.push(Docs.ackRecord(id, me));
+    return recs;
+  }).then(function (s) {
+    refresh(s);
+    toast(problem || 'Acknowledged');
+    if (then) then();
+  })).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
 }
 
 
-document.getElementById('plan-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('plan-error');
-  BudgetSync.showError(err, '');
-  var name = (document.getElementById('plan-name').value || '').trim();
-  var planned = BudgetSync.parseMoney(document.getElementById('plan-amount').value);
-  var groupVal = document.getElementById('plan-group').value;
-  if (!name) return BudgetSync.showError(err, 'Please enter a category name.');
-  if (!isFinite(planned) || planned < 0) return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-  if (isBusy(submitBtn(event))) return;
-  withDots(submitBtn(event), store.load().then(function (budget) {
-    if (!budget) throw new Error('NO_BUDGET');
-    return store.save(BudgetSync.upsertPlannedCategory(budget, {
-      id: editingPlanId || '',
-      name: name,
-      planned: planned,
-      group: groupVal === '' ? -1 : Number(groupVal)
-    }));
-  }).then(function () {
-    resetPlanForm();
-    return refresh();
-  }).catch(function (e) {
-    if (e && e.code === 'DUP') return BudgetSync.showError(err, 'A category with that name already exists.');
-    if (e && e.code === 'NAME') return BudgetSync.showError(err, 'Please enter a category name.');
-    if (e && e.code === 'AMOUNT') return BudgetSync.showError(err, 'Enter a planned amount of zero or more.');
-    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
-    BudgetSync.showError(err, errText(e, 'Could not save that category. Please try again.'));
-  }));
+function queueSignalAnnouncement(item) {
+  function go(url, key) {
+    if (!url || !key || !item || !item.id) return;
+    var opts = {};
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') opts.sendBeacon = navigator.sendBeacon.bind(navigator);
+    if (typeof fetch === 'function') opts.fetch = fetch;
+    if (typeof Blob === 'function') opts.Blob = Blob;
+    Docs.postSignalAnnouncement(url, key, item, opts);
+  }
+  if (typeof OfficeCloud === 'undefined' || typeof OfficeCloud.getConfig !== 'function') return;
+  OfficeCloud.getConfig(t).then(function (cfg) {
+    if (cfg && OfficeCloud.isOn(cfg)) go(cfg.u, cfg.s);
+  }).catch(function () {});
+}
+
+function openBullForm(id) {
+  if (!isAdmin()) return;
+  bulletinEditId = id || null;
+  var b = null;
+  if (id) Docs.bulletinsOf(state.records).forEach(function (x) { if (x.id === id) b = x; });
+  text($('bull-form-title'), b ? 'Edit announcement' : 'Post announcement');
+  $('b-title').value = b ? b.title : '';
+  $('b-msg').value = b ? b.message : '';
+  $('b-url').value = b ? b.url : '';
+  if ($('b-send-signal-wrap')) $('b-send-signal-wrap').hidden = !!id;
+  if ($('b-send-signal')) $('b-send-signal').checked = true;
+  text($('bull-form-error'), '');
+  $('bull-form').querySelector('button[type=submit]').textContent = b ? 'Save' : 'Post';
+  $('bull-form-overlay').hidden = false;
+  $('b-title').focus();
+}
+function closeBullForm() { $('bull-form-overlay').hidden = true; bulletinEditId = null; }
+$('btn-bulletin').addEventListener('click', function () { if (guardWrite()) openBullForm(null); });
+$('b-cancel').addEventListener('click', closeBullForm);
+$('bull-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  if (!guardWrite() || !isAdmin()) return;
+  var title = $('b-title').value.trim();
+  if (!title) { text($('bull-form-error'), 'Please enter a title.'); return; }
+  var message = $('b-msg').value.trim();
+  if (!message) { text($('bull-form-error'), 'Please enter a message.'); return; }
+  if (message.length > Docs.MAX.message) { text($('bull-form-error'), 'That message is too long.'); return; }
+  var url = $('b-url').value.trim();
+  if (url) {
+    var u = Docs.normalizeUrl(url);
+    if (u.error) { text($('bull-form-error'), u.error); return; }
+    url = u.url;
+  }
+  var id = bulletinEditId;
+  var sendToSignal = !id && (!$('b-send-signal') || $('b-send-signal').checked);
+  var queued = null;
+  withDots(btn, Docs.mutate(t, function (recs) {
+    if (id) {
+      var at = -1;
+      recs.forEach(function (r, k) { if (r[0] === 'b' && r[1] === id) at = k; });
+      if (at < 0) return null;
+      recs[at] = Docs.bulletinRecord({
+        id: id, title: title, message: message, url: url,
+        date: recs[at][5], active: recs[at][6],
+        authorId: recs[at][7], authorName: recs[at][8], created: recs[at][9]
+      });
+    } else {
+      var rec = Docs.bulletinRecord({
+        title: title, message: message, url: url, active: 1,
+        authorId: me && me.id, authorName: me && me.name
+      });
+      queued = { id: rec[1], title: rec[2], message: rec[3], url: rec[4] };
+      recs.push(rec);
+    }
+    return recs;
+  }).then(function (s) {
+    closeBullForm(); skipPop = false; popShown = false; refresh(s); toast(id ? 'Saved' : 'Announcement posted');
+    if (Docs.shouldQueueSignal(!id, sendToSignal) && queued) queueSignalAnnouncement(queued);
+  })).catch(function (err) { text($('bull-form-error'), Docs.saveErrorMessage(err)); });
 });
 
-document.getElementById('plan-cancel').addEventListener('click', resetPlanForm);
-
-
-document.getElementById('restore-cats-btn').addEventListener('click', function () {
-  if (!canWrite || !currentBudget) return;
-  var ok = window.confirm(
-    'Restore the office categories? Existing categories are kept and not duplicated. For this session, starting spend is filled in only on categories that have no spending yet.'
-  );
-  if (!ok) return;
-  if (isBusy(document.getElementById('restore-cats-btn'))) return;
-  withDots(document.getElementById('restore-cats-btn'), store.load().then(function (budget) {
-    if (!budget) return;
-    var restored = BudgetSync.ensureOfficeCategories(budget, { force: true });
-    var relinked = BudgetSync.relinkExpenses(restored.budget);
-    return store.save(relinked.budget).then(function () {
-      resetPlanForm();
-      return refresh();
+function endBulletin(id, btn) {
+  if (!isAdmin() || !guardWrite()) return;
+  if (isBusy(btn)) return;
+  withDots(btn, Docs.mutate(t, function (recs) {
+    recs.forEach(function (r, k) {
+      if (r[0] === 'b' && r[1] === id) recs[k] = Docs.bulletinRecord({
+        id: r[1], title: r[2], message: r[3], url: r[4], date: r[5], active: 0,
+        authorId: r[7], authorName: r[8], created: r[9]
+      });
     });
+    return recs;
+  }).then(function (s) { refresh(s); toast('Announcement ended'); })
+    ).catch(function (err) { toast(Docs.saveErrorMessage(err)); });
+}
+
+function renderAnnouncements() {
+  var wrap = $('announcements-list');
+  var badge = $('ann-nav-count');
+  if ($('btn-bulletin')) $('btn-bulletin').hidden = !isAdmin();
+  var unacked = me ? Docs.unackedBulletins(state.records, me.id) : [];
+  if (badge) {
+    if (unacked.length) { text(badge, String(unacked.length)); badge.hidden = false; }
+    else { badge.hidden = true; }
+  }
+  if (!wrap) return;
+  wrap.textContent = '';
+  var list = Docs.bulletinsOf(state.records, false);
+  if (!list.length) {
+    var empty = el('div', 'empty');
+    empty.appendChild(el('strong', null, 'No announcements yet'));
+    empty.appendChild(document.createTextNode(isAdmin() ? 'Click “+ Post announcement” to post the first one. It will pop up for everyone on the board until they acknowledge it.' : 'When the office posts an announcement, it will show up here.'));
+    wrap.appendChild(empty);
+    return;
+  }
+  list.forEach(function (b) { wrap.appendChild(announcementEl(b)); });
+}
+
+function announcementEl(b) {
+  var acked = me ? Docs.findAck(state.records, b.id, me.id) : null;
+  var box = el('div', 'ann-card' + (b.active ? '' : ' ended') + (b.active && me && !acked ? ' needs-ack' : ''));
+  var top = el('div', 'ann-top');
+  top.appendChild(el('p', 'bb-kicker', b.active ? 'Office Bulletin' : 'Ended'));
+  box.appendChild(top);
+  box.appendChild(el('h3', null, b.title));
+  if (b.message) box.appendChild(el('div', 'bb-msg', b.message));
+  var meta = el('p', 'e-meta');
+  var when = b.created ? fmtStamp(b.created) : fmtDate(b.date);
+  var who = b.authorName || '';
+  meta.textContent = who ? (when + ' · ' + who) : when;
+  box.appendChild(meta);
+  var acts = el('div', 'bb-actions');
+  if (b.url) {
+    var a = el('a', 'primary', 'Click here');
+    a.href = b.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    acts.appendChild(a);
+  }
+  if (b.active && me && !acked) {
+    var ack = el('button', 'ghost', 'Acknowledge');
+    ack.type = 'button';
+    ack.addEventListener('click', function () { acknowledge(b.id, null, ack); });
+    acts.appendChild(ack);
+  } else if (acked && !isAdmin()) {
+    box.appendChild(el('p', 'ann-acked', 'You acknowledged on ' + fmtStampTime(acked.at)));
+  }
+  if (isAdmin()) {
+    if (b.active) {
+      var ed = el('button', 'ghost', 'Edit'); ed.type = 'button';
+      ed.addEventListener('click', function () { openBullForm(b.id); });
+      var en = el('button', 'danger', 'End'); en.type = 'button';
+      en.addEventListener('click', function () { endBulletin(b.id, en); });
+      acts.appendChild(ed); acts.appendChild(en);
+    }
+    var del = el('button', 'danger', 'Delete'); del.type = 'button';
+    del.addEventListener('click', function () { askDeleteAnnouncement(b.id); });
+    acts.appendChild(del);
+  }
+  if (acts.childNodes.length) box.appendChild(acts);
+  if (isAdmin()) {
+    var ad = el('div', 'acks');
+    var acks = Docs.acksOf(state.records, b.id);
+    ad.appendChild(el('h4', null, 'Acknowledged by'));
+    if (!acks.length) ad.appendChild(el('div', 'none', 'No one has acknowledged this yet.'));
+    else {
+      var ul = el('ul');
+      acks.forEach(function (k) { ul.appendChild(el('li', null, (k.memberName || 'Someone') + ', ' + fmtStampTime(k.at))); });
+      ad.appendChild(ul);
+    }
+    if (members.length && b.active) {
+      var done = {};
+      acks.forEach(function (k) { done[k.memberId] = true; });
+      var pending = members.filter(function (m) { return !done[m.id]; }).map(function (m) { return m.name; });
+      ad.appendChild(el('h4', null, 'Not yet acknowledged'));
+      ad.appendChild(el('div', pending.length ? 'none' : null, pending.length ? pending.join(', ') : 'Everyone on the board has acknowledged this.'));
+    }
+    box.appendChild(ad);
+  }
+  return box;
+}
+
+
+$('cloud-form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  text($('cloud-error'), '');
+  var btn = submitBtn(e);
+  if (isBusy(btn)) return;
+  withDots(btn, store.setLink($('cloud-url').value).then(function () {
+    return store.load();
+  }).then(function (s) {
+    state = s;
+    renderAll();
+    renderSettings();
+    if (store.mode() === 'google') { $('cloud-url').value = ''; toast('Moved to Google'); }
+    else if (store.error()) text($('cloud-error'), Docs.saveErrorMessage(store.error()));
   }).catch(function (err) {
-    if (err && (err.code === 'FULL' || err.code === 'NEED_CARD')) window.alert(BudgetSync.saveErrorMessage(err));
-    else window.alert(errText(err, 'Could not restore the office categories. Please try again.'));
+    text($('cloud-error'), Docs.saveErrorMessage(err));
   }));
 });
 
-
-document.getElementById('webhook-form').addEventListener('submit', function (event) {
-  event.preventDefault();
-  var err = document.getElementById('webhook-error');
-  BudgetSync.showError(err, '');
-  var url = document.getElementById('webhook-url').value;
-  if (isBusy(submitBtn(event))) return;
-  withDots(submitBtn(event), store.load().then(function (budget) {
-    if (!budget) throw new Error('NO_BUDGET');
-    return store.save(BudgetSync.setWebhookUrl(budget, url)).then(function () {
-      return store.linkChanged(url);
-    });
-  }).then(refresh).catch(function (e) {
-    if (e && e.code === 'HTTPS') return BudgetSync.showError(err, 'Use an https URL (or localhost for a test).');
-    if (e && e.code === 'URL') return BudgetSync.showError(err, 'Enter a valid webhook URL.');
-    if (e && (e.code === 'FULL' || e.code === 'NEED_CARD')) return BudgetSync.showError(err, BudgetSync.saveErrorMessage(e));
-    BudgetSync.showError(err, errText(e, 'Could not save the webhook URL. Please try again.'));
-  }));
-});
-
-document.getElementById('webhook-send').addEventListener('click', function () {
-  var err = document.getElementById('webhook-error');
-  BudgetSync.showError(err, '');
-  if (!currentBudget || !currentBudget.k) {
-    return BudgetSync.showError(err, 'Save a webhook URL first.');
-  }
-  var month = BudgetSync.chicagoYearMonth();
-  var payload = BudgetSync.buildMonthlyPayload(currentBudget, month, currentMemberName, 'email');
-  var url = currentBudget.k;
-  if (isBusy(document.getElementById('webhook-send'))) return;
-  withDots(document.getElementById('webhook-send'), BudgetSync.postWebhook(url, payload).then(function () {
-    webhookStatus = { at: Date.now(), ok: true, month: month, kind: 'email' };
-    renderSettings(currentBudget);
-  }).catch(function (e) {
-    webhookStatus = { at: Date.now(), ok: false, kind: 'email' };
-    BudgetSync.showError(err, 'The update could not be sent. Check the URL and try again.');
-    renderSettings(currentBudget);
-  }));
-});
-
-
-window.addEventListener('pageshow', kickPaint);
-document.addEventListener('visibilitychange', function () {
-  if (document.visibilityState === 'visible') kickPaint();
-});
-
+/* ---------- start ---------- */
 t.render(function () {
   canWrite = typeof t.memberCanWriteToModel === 'function' ? t.memberCanWriteToModel('board') : true;
-  return t.member('fullName', 'username').then(function (member) {
-    currentMemberName = (member && (member.fullName || member.username)) || 'you';
-    return refresh();
-  }).catch(function (e) {
-    return refresh();
+  renderChips();
+  return Promise.all([store.load(), Docs.whoAmI(t)]).then(function (res) {
+    state = res[0]; me = res[1];
+    text($('ver'), Docs.ASSET_VERSION);
+    var first = Promise.resolve();
+    // The first time Calvin (name contains "Callahan") opens the app, remember him as the admin.
+    if (me && !state.admin && Docs.nameMatchesAdmin(me) && canWrite && state.missing === 0) {
+      first = Docs.mutate(t, function (recs) { return recs; }, function () { return [me.id, me.name]; })
+        .then(function (s) { state = s; }).catch(function () {});
+    }
+    return first;
+  }).then(function () {
+    if (me) Docs.rememberOpen(t, state.records, me.id);
+    renderAll();
+    showSection(Docs.requestedSection());
+    hideLoader();
+    if (isAdmin()) return Docs.boardMembers(t).then(function (m) { members = m; renderAll(); });
+  }).catch(function (err) {
+    hideLoader();
+    showBanner(err && err.cloud ? Docs.saveErrorMessage(err) : 'Could not load documents. Close and reopen this window.');
+    var ban = $('banner');
+    if (ban) { ban.className = 'banner is-full'; ban.hidden = false; }
   });
 });
